@@ -25,7 +25,11 @@ export default function TeacherStudentProfilePage() {
     [],
   );
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState<boolean>(false);
-  const [selectedStageId, setSelectedStageId] = useState<number>(1);
+  const [selectedStage, setSelectedStage] = useState<{
+    stageId: number;
+    title?: string;
+    relativeStageNum?: number;
+  }>({ stageId: 1 });
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 5;
   const streakMessage = getStreakMessage(student?.streak || 0);
@@ -345,7 +349,11 @@ export default function TeacherStudentProfilePage() {
                             <button
                               type="button"
                               onClick={() => {
-                                setSelectedStageId(stageGroup.stageNum);
+                                setSelectedStage({
+                                  stageId: stageGroup.stageNum,
+                                  title: stageGroup.title,
+                                  relativeStageNum: stageGroup.relativeStageNum,
+                                });
                                 setIsAnalyticsOpen(true);
                               }}
                               className="inline-flex items-center gap-1 rounded-xl bg-orange-50 px-3 py-1.5 text-xs font-bold text-[#FF8A00] border border-orange-200 hover:bg-[#FF8A00] hover:text-white transition-all shadow-2xs cursor-pointer"
@@ -436,7 +444,9 @@ export default function TeacherStudentProfilePage() {
         <UnitAnalyticsModal
           studentId={id}
           studentName={student.name}
-          stageId={selectedStageId}
+          stageId={selectedStage.stageId}
+          stageTitle={selectedStage.title}
+          relativeStageNum={selectedStage.relativeStageNum}
           isOpen={isAnalyticsOpen}
           onClose={() => setIsAnalyticsOpen(false)}
         />

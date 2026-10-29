@@ -32,6 +32,7 @@ export default function ParentHomePage() {
   const [selectedStageForAnalytics, setSelectedStageForAnalytics] = useState<{
     stageId: number;
     title: string;
+    relativeStageNum?: number;
   } | null>(null);
   const itemsPerPage = 5;
 
@@ -566,6 +567,7 @@ export default function ParentHomePage() {
                                   setSelectedStageForAnalytics({
                                     stageId: stageItem.stageId,
                                     title: stageItem.title,
+                                    relativeStageNum: stageItem.relativeStageNum,
                                   })
                                 }
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-xs font-bold text-[#FF8A00] hover:bg-[#FF8A00] hover:text-white transition-all shadow-xs"
@@ -658,6 +660,7 @@ export default function ParentHomePage() {
           studentName={selectedChild.name}
           stageId={selectedStageForAnalytics.stageId}
           stageTitle={selectedStageForAnalytics.title}
+          relativeStageNum={selectedStageForAnalytics.relativeStageNum}
           isOpen={true}
           onClose={() => setSelectedStageForAnalytics(null)}
         />

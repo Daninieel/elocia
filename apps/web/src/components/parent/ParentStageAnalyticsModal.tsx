@@ -6,6 +6,7 @@ interface ParentStageAnalyticsModalProps {
   studentName: string;
   stageId: number;
   stageTitle?: string;
+  relativeStageNum?: number;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -42,9 +43,14 @@ export default function ParentStageAnalyticsModal({
   studentName,
   stageId,
   stageTitle,
+  relativeStageNum,
   isOpen,
   onClose,
 }: ParentStageAnalyticsModalProps) {
+  const displayStageNumber =
+    relativeStageNum ??
+    (stageTitle ? Number(stageTitle.match(/Stage\s*(\d+)/i)?.[1]) : null) ??
+    stageId;
   const [loading, setLoading] = useState<boolean>(true);
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [insight, setInsight] = useState<string>("");
@@ -113,14 +119,14 @@ export default function ParentStageAnalyticsModal({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg sm:text-xl font-extrabold text-gray-900 tracking-tight">
-                  Stage {stageId} Analytics
+                  Stage {displayStageNumber} Analytics
                 </h2>
                 <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-700">
                   {studentName}
                 </span>
               </div>
               <p className="text-xs font-medium text-gray-500 mt-0.5">
-                {stageTitle || `Learning path breakdown & progress for Stage ${stageId}`}
+                {stageTitle || `Learning path breakdown & progress for Stage ${displayStageNumber}`}
               </p>
             </div>
           </div>

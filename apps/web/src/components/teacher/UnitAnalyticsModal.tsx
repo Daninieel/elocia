@@ -5,6 +5,8 @@ interface UnitAnalyticsModalProps {
   studentId: string;
   studentName: string;
   stageId: number;
+  stageTitle?: string;
+  relativeStageNum?: number;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -49,9 +51,15 @@ export default function UnitAnalyticsModal({
   studentId,
   studentName,
   stageId,
+  stageTitle,
+  relativeStageNum,
   isOpen,
   onClose,
 }: UnitAnalyticsModalProps) {
+  const displayStageNumber =
+    relativeStageNum ??
+    (stageTitle ? Number(stageTitle.match(/Stage\s*(\d+)/i)?.[1]) : null) ??
+    stageId;
   const [loading, setLoading] = useState<boolean>(true);
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [insight, setInsight] = useState<string>("");
@@ -156,14 +164,14 @@ export default function UnitAnalyticsModal({
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base sm:text-xl font-extrabold text-gray-900 tracking-tight">
-                  Unit Analytics: Stage {stageId}
+                  Unit Analytics: Stage {displayStageNumber}
                 </h2>
                 <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-700">
                   {studentName}
                 </span>
               </div>
               <p className="text-xs font-medium text-gray-500 mt-0.5 hidden sm:block">
-                Detailed 4-parameter signing diagnosis and targeted drill creator
+                {stageTitle || `Detailed 4-parameter signing diagnosis for Stage ${displayStageNumber}`}
               </p>
             </div>
           </div>
