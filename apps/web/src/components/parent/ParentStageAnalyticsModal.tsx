@@ -240,7 +240,16 @@ export default function ParentStageAnalyticsModal({
                     )}
                   </div>
                   <span className="text-xs font-bold text-gray-400">
-                    Overall: {selectedRound ? Math.round(selectedRound.score_overall) : overallScore}%
+                    Overall: {selectedRound
+                      ? Math.round(selectedRound.score_overall)
+                      : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
+                      ? Math.round(
+                          rounds
+                            .filter((r) => r.score_overall > 0 || r.passed)
+                            .reduce((acc, r) => acc + r.score_overall, 0) /
+                            rounds.filter((r) => r.score_overall > 0 || r.passed).length
+                        )
+                      : overallScore}%
                   </span>
                 </div>
 
@@ -251,6 +260,45 @@ export default function ParentStageAnalyticsModal({
                         { name: "Palm Orientation", key: "palm_orientation", score: selectedRound.score_palm_orientation },
                         { name: "Location", key: "location", score: selectedRound.score_location },
                         { name: "Movement", key: "movement", score: selectedRound.score_movement },
+                      ]
+                    : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
+                    ? [
+                        {
+                          name: "Handshape",
+                          key: "handshape",
+                          score:
+                            rounds
+                              .filter((r) => r.score_overall > 0 || r.passed)
+                              .reduce((acc, r) => acc + (r.score_handshape || 0), 0) /
+                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
+                        },
+                        {
+                          name: "Palm Orientation",
+                          key: "palm_orientation",
+                          score:
+                            rounds
+                              .filter((r) => r.score_overall > 0 || r.passed)
+                              .reduce((acc, r) => acc + (r.score_palm_orientation || 0), 0) /
+                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
+                        },
+                        {
+                          name: "Location",
+                          key: "location",
+                          score:
+                            rounds
+                              .filter((r) => r.score_overall > 0 || r.passed)
+                              .reduce((acc, r) => acc + (r.score_location || 0), 0) /
+                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
+                        },
+                        {
+                          name: "Movement",
+                          key: "movement",
+                          score:
+                            rounds
+                              .filter((r) => r.score_overall > 0 || r.passed)
+                              .reduce((acc, r) => acc + (r.score_movement || 0), 0) /
+                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
+                        },
                       ]
                     : parameters
                   ).map((param) => {

@@ -54,7 +54,7 @@ export default function ParentProgressPage() {
                     {param.name}
                   </span>
                   <span className="px-3.5 py-0.5 rounded-full bg-[#FF8A00] text-white text-xs font-bold shadow-xs">
-                    {param.value}
+                    {param.value}%
                   </span>
                 </div>
 

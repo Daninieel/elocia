@@ -143,11 +143,30 @@ async def get_parent_progress_summary(student_id: uuid.UUID, db: AsyncSession = 
             home_practice_recommendation=f"Welcome! {student.name} hasn't completed any sign language practice sessions yet. Start Stage 1 on the desktop app to begin learning and tracking progress!",
         )
 
-    # Calculate parameter averages for this student
-    avg_h = float((await db.execute(select(func.avg(EvaluationAttempt.score_handshape)).where(EvaluationAttempt.student_id == student_id))).scalar() or 0.0)
-    avg_p = float((await db.execute(select(func.avg(EvaluationAttempt.score_palm_orientation)).where(EvaluationAttempt.student_id == student_id))).scalar() or 0.0)
-    avg_l = float((await db.execute(select(func.avg(EvaluationAttempt.score_location)).where(EvaluationAttempt.student_id == student_id))).scalar() or 0.0)
-    avg_m = float((await db.execute(select(func.avg(EvaluationAttempt.score_movement)).where(EvaluationAttempt.student_id == student_id))).scalar() or 0.0)
+    # Calculate parameter averages for this student based on culminating performance per sign:
+    # Deduplicates by sign so early struggle/scaffolded failures don't permanently drag down the overall report.
+    all_student_attempts_res = await db.execute(
+        select(EvaluationAttempt)
+        .where(EvaluationAttempt.student_id == student_id)
+        .order_by(EvaluationAttempt.created_at.desc())
+    )
+    all_student_attempts = all_student_attempts_res.scalars().all()
+
+    latest_per_sign = {}
+    for a in all_student_attempts:
+        key = f"{a.stage_id or 1}_{a.sign_id or 1}"
+        if key not in latest_per_sign:
+            latest_per_sign[key] = a
+
+    mastery_list = list(latest_per_sign.values()) if latest_per_sign else all_student_attempts
+    if mastery_list:
+        avg_h = round(float(sum((a.score_handshape or 0.0) for a in mastery_list) / len(mastery_list)), 1)
+        avg_p = round(float(sum((a.score_palm_orientation or 0.0) for a in mastery_list) / len(mastery_list)), 1)
+        avg_l = round(float(sum((a.score_location or 0.0) for a in mastery_list) / len(mastery_list)), 1)
+        avg_m = round(float(sum((a.score_movement or 0.0) for a in mastery_list) / len(mastery_list)), 1)
+        avg_score = round(float(sum((a.score_overall or 0.0) for a in mastery_list) / len(mastery_list)), 2)
+    else:
+        avg_h = avg_p = avg_l = avg_m = avg_score = 0.0
 
     params = {
         "Finger & Hand Shapes": avg_h,
@@ -165,12 +184,6 @@ async def get_parent_progress_summary(student_id: uuid.UUID, db: AsyncSession = 
     else:
         lowest = min(params, key=params.get)
         recommendation = f"Encourage {student.name} to focus on '{lowest}' during home practice. Try doing the signs together slowly!"
-
-    avg_score_res = await db.execute(
-        select(func.avg(EvaluationAttempt.score_overall))
-        .where(EvaluationAttempt.student_id == student_id)
-    )
-    avg_score = round(float(avg_score_res.scalar() or 0.0), 2)
 
     return ParentProgressSummary(
         student_id=student.id,
@@ -260,13 +273,30 @@ async def get_student_unit_analytics(
         )
         attempts = all_att_res.scalars().all()
 
-    # Calculate average parameter scores
-    if attempts:
-        avg_handshape = round(sum((a.score_handshape or 0) for a in attempts) / len(attempts), 1)
-        avg_palm = round(sum((a.score_palm_orientation or 0) for a in attempts) / len(attempts), 1)
-        avg_location = round(sum((a.score_location or 0) for a in attempts) / len(attempts), 1)
-        avg_movement = round(sum((a.score_movement or 0) for a in attempts) / len(attempts), 1)
-        overall_score = round(sum((a.score_overall or 0) for a in attempts) / len(attempts), 1)
+    # Query baseline sign names
+    sign_names = {}
+    baseline_res = await db.execute(select(FSLBaseline.sign_id, FSLBaseline.sign_name))
+    for sid, sname in baseline_res.all():
+        if sid:
+            sign_names[sid] = sname
+
+    # Identify culminating performance per sign:
+    # attempts is ordered by created_at.desc(), so the first time we see s_id is the latest attempt
+    latest_attempt_by_sign = {}
+    for a in attempts:
+        s_id = a.sign_id or a.stage_id or 1
+        if s_id not in latest_attempt_by_sign:
+            latest_attempt_by_sign[s_id] = a
+
+    # Calculate parameter mastery across the student's culminating attempts per sign in this stage:
+    # Ensures Stage Average matches the round cards and does not penalize pre-scaffold struggle attempts!
+    eval_attempts = list(latest_attempt_by_sign.values()) if latest_attempt_by_sign else attempts
+    if eval_attempts:
+        avg_handshape = round(sum((a.score_handshape or 0) for a in eval_attempts) / len(eval_attempts), 1)
+        avg_palm = round(sum((a.score_palm_orientation or 0) for a in eval_attempts) / len(eval_attempts), 1)
+        avg_location = round(sum((a.score_location or 0) for a in eval_attempts) / len(eval_attempts), 1)
+        avg_movement = round(sum((a.score_movement or 0) for a in eval_attempts) / len(eval_attempts), 1)
+        overall_score = round(sum((a.score_overall or 0) for a in eval_attempts) / len(eval_attempts), 1)
     else:
         # Realistic default baseline if student has zero attempts
         avg_handshape = 88.0
@@ -291,22 +321,6 @@ async def get_student_unit_analytics(
     }
     lowest_param = min(param_dict, key=param_dict.get)
     diagnostic_insight = f"Student is struggling slightly with {lowest_param} parameters. Consider focusing practice on spatial positioning and accuracy."
-
-    # Query baseline sign names
-    sign_names = {}
-    baseline_res = await db.execute(select(FSLBaseline.sign_id, FSLBaseline.sign_name))
-    for sid, sname in baseline_res.all():
-        if sid:
-            sign_names[sid] = sname
-
-    # Identify items that currently need practice based on the LATEST attempt per sign.
-    # If the student practiced and passed the sign, it should no longer be flagged!
-    latest_attempt_by_sign = {}
-    for a in attempts:
-        s_id = a.sign_id or a.stage_id or 1
-        # attempts is ordered by created_at.desc(), so the first time we see s_id is the latest attempt
-        if s_id not in latest_attempt_by_sign:
-            latest_attempt_by_sign[s_id] = a
 
     needs_practice = []
     seen_signs = set()

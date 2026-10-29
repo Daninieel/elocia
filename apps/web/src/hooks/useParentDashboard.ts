@@ -209,10 +209,30 @@ export function useParentDashboard() {
           ? Math.min(100, Math.round((distinctStagesPassed / totalStages) * 100))
           : 0;
 
+        // Group attempts by distinct sign (stage_id + sign_id) to calculate culminating mastery per sign:
+        // Ensures overall parameter mastery reflects true student competence rather than dragging in early struggle attempts!
+        const latestAttemptBySign = new Map<string, EvaluationAttemptItem>();
+        for (const a of validAttempts) {
+          const key = `${a.stage_id || 1}_${a.sign_id || 1}`;
+          if (!latestAttemptBySign.has(key)) {
+            latestAttemptBySign.set(key, a);
+          } else {
+            const existing = latestAttemptBySign.get(key)!;
+            const existingTime = new Date(existing.created_at || "").getTime();
+            const currTime = new Date(a.created_at || "").getTime();
+            if (currTime > existingTime) {
+              latestAttemptBySign.set(key, a);
+            }
+          }
+        }
+
+        const masteryAttempts = Array.from(latestAttemptBySign.values());
+        const targetList = masteryAttempts.length > 0 ? masteryAttempts : validAttempts;
+
         const realAvg = summaryData?.avg_score
           ? Math.round(summaryData.avg_score)
-          : validAttempts.length > 0
-          ? Math.round(validAttempts.reduce((acc: number, a: EvaluationAttemptItem) => acc + a.score_overall, 0) / validAttempts.length)
+          : targetList.length > 0
+          ? Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + a.score_overall, 0) / targetList.length)
           : 0;
 
         const realStreak = selectedChild?.streak ?? summaryData?.streak ?? 0;
@@ -225,12 +245,12 @@ export function useParentDashboard() {
           streak: realStreak,
         });
 
-        // Compute Live 4-Parameter Mastery
-        if (validAttempts.length > 0) {
-          const avgH = Math.round(validAttempts.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_handshape || 0), 0) / validAttempts.length);
-          const avgP = Math.round(validAttempts.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_palm_orientation || 0), 0) / validAttempts.length);
-          const avgL = Math.round(validAttempts.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_location || 0), 0) / validAttempts.length);
-          const avgM = Math.round(validAttempts.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_movement || 0), 0) / validAttempts.length);
+        // Compute Live 4-Parameter Mastery across culminating performance per sign
+        if (targetList.length > 0) {
+          const avgH = Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_handshape || 0), 0) / targetList.length);
+          const avgP = Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_palm_orientation || 0), 0) / targetList.length);
+          const avgL = Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_location || 0), 0) / targetList.length);
+          const avgM = Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + (a.score_movement || 0), 0) / targetList.length);
 
           setParameterMastery([
             { name: "Handshape", key: "handshape", value: avgH },
