@@ -1,3 +1,4 @@
+import { ParentDashboardProvider } from "@/contexts/ParentDashboardContext";
 import { useState } from "react";
 import ParentSideNavbar from "@/components/parent/SideNavbar";
 import { Outlet } from "react-router-dom";
@@ -36,7 +37,9 @@ export default function ParentLayout() {
 
       {/* Main Content Area */}
       <main className="min-w-0 flex-1 lg:ml-64">
-        <Outlet />
+        <ParentDashboardProvider>
+          <Outlet />
+        </ParentDashboardProvider>
       </main>
     </div>
   );

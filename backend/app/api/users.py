@@ -214,28 +214,33 @@ async def get_parent_students(parent_id: uuid.UUID, db: AsyncSession = Depends(g
 
     # Query student IDs that have active Tier 4 or unpassed attempts based on their LATEST attempt per sign
     # (If a student previously failed but subsequently practiced and passed the sign, the flag is cleared!)
-    latest_attempts_sub = (
-        select(
-            EvaluationAttempt.student_id,
-            EvaluationAttempt.sign_id,
-            EvaluationAttempt.passed,
-            EvaluationAttempt.tier_level,
-            func.row_number().over(
-                partition_by=(EvaluationAttempt.student_id, EvaluationAttempt.sign_id),
-                order_by=EvaluationAttempt.created_at.desc()
-            ).label("rn")
+    # Optimization: Filter strictly to this parent's linked children to prevent scanning the entire attempts table!
+    child_ids = [u.id for _, u, _ in rows]
+    flagged_student_ids = set()
+    if child_ids:
+        latest_attempts_sub = (
+            select(
+                EvaluationAttempt.student_id,
+                EvaluationAttempt.sign_id,
+                EvaluationAttempt.passed,
+                EvaluationAttempt.tier_level,
+                func.row_number().over(
+                    partition_by=(EvaluationAttempt.student_id, EvaluationAttempt.sign_id),
+                    order_by=EvaluationAttempt.created_at.desc()
+                ).label("rn")
+            )
+            .where(EvaluationAttempt.student_id.in_(child_ids))
+            .subquery()
         )
-        .subquery()
-    )
-    tier4_res = await db.execute(
-        select(latest_attempts_sub.c.student_id)
-        .where(
-            latest_attempts_sub.c.rn == 1,
-            (latest_attempts_sub.c.passed == False) | (latest_attempts_sub.c.tier_level >= 4)
+        tier4_res = await db.execute(
+            select(latest_attempts_sub.c.student_id)
+            .where(
+                latest_attempts_sub.c.rn == 1,
+                (latest_attempts_sub.c.passed == False) | (latest_attempts_sub.c.tier_level >= 4)
+            )
+            .distinct()
         )
-        .distinct()
-    )
-    flagged_student_ids = {str(sid) for (sid,) in tier4_res.all()}
+        flagged_student_ids = {str(sid) for (sid,) in tier4_res.all()}
 
     students = []
     for ps, u, sp in rows:
@@ -430,7 +435,7 @@ async def get_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
                 func.round(cast(func.avg(case((EvaluationAttempt.score_overall > 0, EvaluationAttempt.score_overall))), Numeric), 1),
                 0.0
             ).label("avg_score"),
-            func.count(func.distinct(case((EvaluationAttempt.passed == True, EvaluationAttempt.stage_id)))).label("signs_mastered")
+            func.count(func.distinct(case((EvaluationAttempt.passed == True, EvaluationAttempt.sign_id)))).label("signs_mastered")
         )
         .where(EvaluationAttempt.student_id == user_id)
     )

@@ -50,20 +50,33 @@ export default function TeacherStudentProfilePage() {
       const unitNum = attempt.unit_number || 1;
       const formattedTitle = attempt.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
 
+      const signKey = `${attempt.sign_id || 1}`;
+
       if (!stageMap[sNum]) {
-        stageMap[sNum] = {
+        const signMap = new Map<string, { score: number; date: string }>();
+        signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+        (stageMap as any)[sNum] = {
           stageNum: sNum,
           relativeStageNum: relStage,
           title: formattedTitle,
           unitNumber: unitNum,
-          scores: [],
+          signMap,
           latestDate: attempt.created_at || "",
           isFlagged: false,
           roundsCount: 0,
         };
+      } else {
+        const signMap = (stageMap as any)[sNum].signMap;
+        if (!signMap.has(signKey)) {
+          signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+        } else {
+          const existing = signMap.get(signKey)!;
+          if (new Date(attempt.created_at || "").getTime() > new Date(existing.date).getTime()) {
+            signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+          }
+        }
       }
-      stageMap[sNum].scores.push(attempt.score_overall);
-      stageMap[sNum].roundsCount += 1;
+      (stageMap as any)[sNum].roundsCount = (stageMap as any)[sNum].signMap.size;
       if (attempt.tier_level === 4) {
         stageMap[sNum].isFlagged = true;
       }
@@ -72,10 +85,14 @@ export default function TeacherStudentProfilePage() {
       }
     });
 
-    return Object.values(stageMap).map((item) => ({
-      ...item,
-      avgScore: item.scores.length > 0 ? Math.round(item.scores.reduce((a, b) => a + b, 0) / item.scores.length) : 0,
-    })).sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
+    return Object.values(stageMap).map((item: any) => {
+      const culminatingScores = Array.from((item.signMap as Map<string, { score: number }>).values()).map(v => v.score);
+      const avg = culminatingScores.length > 0 ? culminatingScores.reduce((a, b) => a + b, 0) / culminatingScores.length : 0;
+      return {
+        ...item,
+        avgScore: Math.round(avg),
+      };
+    }).sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
   })();
 
   useEffect(() => {

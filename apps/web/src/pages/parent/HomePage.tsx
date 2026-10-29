@@ -52,7 +52,7 @@ export default function ParentHomePage() {
     error,
   } = useParentDashboard();
 
-  // Group recent assignment scores by stage
+  // Group recent assignment scores by stage using culminating mastery per sign
   const stageGroupedScores = useMemo<StageGroupedAssignment[]>(() => {
     if (!scores || scores.length === 0) return [];
 
@@ -61,7 +61,7 @@ export default function ParentHomePage() {
       relativeStageNum: number;
       stageId: number;
       title: string;
-      scores: number[];
+      signMap: Map<string, { score: number; date: string }>;
       dates: string[];
       hasFlag: boolean;
     }>();
@@ -74,29 +74,43 @@ export default function ParentHomePage() {
       const unitNum = s.unit_number || 1;
       const title = s.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
       const isFlag = s.tier_level === 4;
+      const signKey = `${s.sign_id || 1}`;
 
       if (!map.has(stageNum)) {
+        const signMap = new Map<string, { score: number; date: string }>();
+        signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
         map.set(stageNum, {
           stageNum,
           relativeStageNum: relStage,
           stageId,
           title,
-          scores: [s.score_overall],
+          signMap,
           dates: s.created_at ? [s.created_at] : [],
           hasFlag: isFlag,
         });
       } else {
         const item = map.get(stageNum)!;
-        item.scores.push(s.score_overall);
         if (s.created_at) item.dates.push(s.created_at);
         if (isFlag) item.hasFlag = true;
+
+        if (!item.signMap.has(signKey)) {
+          item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
+        } else {
+          const existing = item.signMap.get(signKey)!;
+          if (new Date(s.created_at || "").getTime() > new Date(existing.date).getTime()) {
+            item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
+          }
+        }
       }
     });
 
     return Array.from(map.values())
       .map((item) => {
+        const culminatingScores = Array.from(item.signMap.values()).map((v) => v.score);
         const avg =
-          item.scores.reduce((a, b) => a + b, 0) / (item.scores.length || 1);
+          culminatingScores.length > 0
+            ? culminatingScores.reduce((a, b) => a + b, 0) / culminatingScores.length
+            : 0;
         const sortedDates = item.dates.sort(
           (a, b) => new Date(b).getTime() - new Date(a).getTime()
         );
@@ -105,7 +119,7 @@ export default function ParentHomePage() {
           relativeStageNum: item.relativeStageNum,
           stageId: item.stageId,
           title: item.title,
-          signCount: item.scores.length,
+          signCount: item.signMap.size,
           avgScore: Math.round(avg),
           latestDate: sortedDates[0] || "",
           isFlagged: item.hasFlag,

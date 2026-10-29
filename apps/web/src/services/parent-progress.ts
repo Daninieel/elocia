@@ -65,10 +65,18 @@ export async function fetchStudentScores(
   return response.json();
 }
 
+const curriculumCache = new Map<string, any>();
+
 /**
  * Fetch full curriculum structure to calculate overall student progress.
+ * In-memory module cache guarantees instant 0ms responses on repeated calls.
  */
 export async function fetchCurriculumStages(gradeLevel?: number): Promise<any> {
+  const cacheKey = String(gradeLevel ?? "default");
+  if (curriculumCache.has(cacheKey)) {
+    return curriculumCache.get(cacheKey);
+  }
+
   const url = gradeLevel
     ? `${API_BASE_URL}/curriculum?grade_level=${gradeLevel}`
     : `${API_BASE_URL}/curriculum`;
@@ -83,7 +91,9 @@ export async function fetchCurriculumStages(gradeLevel?: number): Promise<any> {
     return null;
   }
 
-  return response.json();
+  const data = await response.json();
+  curriculumCache.set(cacheKey, data);
+  return data;
 }
 
 /**

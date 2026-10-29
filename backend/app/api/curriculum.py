@@ -333,6 +333,21 @@ async def get_student_progress(student_id: str, db: AsyncSession = Depends(get_d
     current_sec_id = None
     prev_passed = True
 
+    # Pre-aggregate distinct completed signs by stage for this student in ONE fast grouped query
+    completed_signs_query = (
+        select(
+            EvaluationAttempt.stage_id_new,
+            func.count(func.distinct(EvaluationAttempt.sign_id))
+        )
+        .where(
+            EvaluationAttempt.student_id == stud_uuid,
+            EvaluationAttempt.passed == True
+        )
+        .group_by(EvaluationAttempt.stage_id_new)
+    )
+    completed_res = await db.execute(completed_signs_query)
+    completed_map = {st_id: count for st_id, count in completed_res.all() if st_id is not None}
+
     for stage, sec_id in all_active_stage_rows:
         if sec_id != current_sec_id:
             # New section begins: first stage of this section is always unlocked!
@@ -362,16 +377,8 @@ async def get_student_progress(student_id: str, db: AsyncSession = Depends(get_d
             best_score = 0.0
             stars = 0
 
-        # Count distinct passed signs in this stage for partial progress display
-        completed_res = await db.execute(
-            select(func.count(func.distinct(EvaluationAttempt.sign_id)))
-            .where(
-                EvaluationAttempt.student_id == stud_uuid,
-                EvaluationAttempt.stage_id_new == stage.id,
-                EvaluationAttempt.passed == True
-            )
-        )
-        completed_signs = completed_res.scalar() or 0
+        # Fast in-memory lookup from pre-aggregated map (0ms vs N SQL roundtrips!)
+        completed_signs = completed_map.get(stage.id, 0)
 
         if effective_unlocked:
             unlocked_stages.append(stage.stage_number)
@@ -402,22 +409,26 @@ async def get_student_progress(student_id: str, db: AsyncSession = Depends(get_d
 
     streak = get_effective_streak(profile)
 
-    # Total signs mastered (Tier 1 passes)
-    mastered_res = await db.execute(
-        select(func.count(func.distinct(EvaluationAttempt.sign_id)))
-        .where(
-            EvaluationAttempt.student_id == student_id,
-            EvaluationAttempt.passed == True,
-            EvaluationAttempt.tier_level == 1
-        )
+    # Calculate culminating mastery across signs (aligned with Web Parent & Teacher standards)
+    all_student_attempts_res = await db.execute(
+        select(EvaluationAttempt)
+        .where(EvaluationAttempt.student_id == stud_uuid)
+        .order_by(EvaluationAttempt.created_at.desc())
     )
-    total_signs_mastered = mastered_res.scalar() or 0
+    all_student_attempts = all_student_attempts_res.scalars().all()
 
-    avg_res = await db.execute(
-        select(func.avg(EvaluationAttempt.score_overall))
-        .where(EvaluationAttempt.student_id == student_id)
-    )
-    avg_score = round(float(avg_res.scalar() or 0.0), 2)
+    latest_per_sign = {}
+    mastered_signs = set()
+    for a in all_student_attempts:
+        key = f"{a.stage_id or 1}_{a.sign_id or 1}"
+        if key not in latest_per_sign:
+            latest_per_sign[key] = a
+        if a.passed:
+            mastered_signs.add(a.sign_id or 1)
+
+    mastery_list = list(latest_per_sign.values()) if latest_per_sign else all_student_attempts
+    avg_score = round(float(sum((a.score_overall or 0.0) for a in mastery_list) / len(mastery_list)), 2) if mastery_list else 0.0
+    total_signs_mastered = len(mastered_signs)
 
     return {
         "student_id": student_id,
