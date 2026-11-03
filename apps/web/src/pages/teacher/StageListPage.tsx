@@ -1,7 +1,10 @@
+import { useState } from "react";
 import Button from "@/components/Button";
 import Separator from "@/components/Separator";
 import TopHeaderBar from "@/components/teacher/TopHeaderBar";
 import EditStageDialog from "@/components/teacher/EditStageDialog";
+import EditStageThumbnailsDialog from "@/components/teacher/EditStageThumbnailsDialog";
+import { Image as ImageIcon } from "lucide-react";
 import { useGetStages } from "@/hooks/useCurriculums";
 import type { Stage } from "@/interfaces/curriculum.interface";
 import { useNavigate, Link, useParams } from "react-router-dom";
@@ -98,37 +101,62 @@ function StageCard({
   displayStageNumber: number;
   onRefresh: () => void;
 }) {
+  const [isThumbnailsModalOpen, setIsThumbnailsModalOpen] = useState(false);
+
   return (
-    <article
-      className={`flex min-h-52 flex-col overflow-hidden rounded-2xl border p-4 shadow-sm transition hover:border-(--primary) hover:shadow-lg ${
-        stage.is_active
-          ? "border-(--border) bg-(--white)"
-          : "border-(--danger) bg-(--danger-light)"
-      }`}
-    >
-      <div className="mb-8 flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <span className="h-8 w-1 rounded-full bg-(--primary)" />
-          <div>
-            <p className="caption uppercase text-(--ghost)">
-              Stage {displayStageNumber}
-            </p>
-            <h2 className="heading-3 text-(--black)">{stage.title}</h2>
+    <>
+      <article
+        className={`flex min-h-52 flex-col overflow-hidden rounded-2xl border p-4 shadow-sm transition hover:border-(--primary) hover:shadow-lg ${
+          stage.is_active
+            ? "border-(--border) bg-(--white)"
+            : "border-(--danger) bg-(--danger-light)"
+        }`}
+      >
+        <div className="mb-8 flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <span className="h-8 w-1 rounded-full bg-(--primary)" />
+            <div>
+              <p className="caption uppercase text-(--ghost)">
+                Stage {displayStageNumber}
+              </p>
+              <h2 className="heading-3 text-(--black)">{stage.title}</h2>
+            </div>
+          </div>
+          <EditStageDialog stage={stage} onUpdated={onRefresh} />
+        </div>
+
+        {stage.description && (
+          <p className="paragraph-2 text-(--ghost)">{stage.description}</p>
+        )}
+
+        <div className="mt-auto space-y-4 pt-4">
+          <Separator />
+          <div className="flex items-center justify-between gap-2">
+            <Link to={`stages/${stage.id}`}>
+              <Button className="w-fit">View Stage</Button>
+            </Link>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsThumbnailsModalOpen(true)}
+              className="text-xs px-3 py-2 gap-1.5 cursor-pointer bg-white text-gray-700 hover:text-(--primary) border-gray-200 hover:bg-amber-50"
+              title="Edit visual aid thumbnails for Lesson Proper"
+            >
+              <ImageIcon className="size-3.5 text-amber-500" />
+              <span>Thumbnails</span>
+            </Button>
           </div>
         </div>
-        <EditStageDialog stage={stage} onUpdated={onRefresh} />
-      </div>
+      </article>
 
-      {stage.description && (
-        <p className="paragraph-2 text-(--ghost)">{stage.description}</p>
-      )}
-
-      <div className="mt-auto space-y-4 pt-4">
-        <Separator />
-        <Link to={`stages/${stage.id}`}>
-          <Button className="w-fit">View Stage</Button>
-        </Link>
-      </div>
-    </article>
+      <EditStageThumbnailsDialog
+        isOpen={isThumbnailsModalOpen}
+        onClose={() => setIsThumbnailsModalOpen(false)}
+        stageId={stage.id}
+        stageTitle={stage.title}
+        stageNumber={displayStageNumber}
+        onUpdated={onRefresh}
+      />
+    </>
   );
 }

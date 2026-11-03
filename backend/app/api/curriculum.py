@@ -15,6 +15,7 @@ from app.schemas.curriculum import (
 from typing import List, Optional, Dict, Any
 import os
 import uuid
+import time
 from app.core.streak import get_effective_streak
 
 # Storage paths for cleanup & static visual aids
@@ -29,7 +30,7 @@ os.makedirs(PUBLIC_THUMBNAILS_DIR, exist_ok=True)
 os.makedirs(STORAGE_THUMBNAILS_DIR, exist_ok=True)
 
 def resolve_sign_photo(sign_id: Optional[int], stage_id: Optional[int] = None, sign_name: Optional[str] = None) -> Optional[str]:
-    """Resolve static visual aid image path for learners."""
+    """Resolve static visual aid image path for learners with mtime cache-busting."""
     candidates = []
     if sign_id:
         candidates.extend([f"{sign_id}.png", f"{sign_id}.jpg", f"{sign_id}.jpeg", f"{sign_id}.webp", f"thumb_{sign_id}.png"])
@@ -39,8 +40,15 @@ def resolve_sign_photo(sign_id: Optional[int], stage_id: Optional[int] = None, s
         candidates.extend([f"{sign_name}.png", f"{sign_name}.jpg", f"thumb_{sign_name}.png"])
 
     for cand in candidates:
-        if os.path.exists(os.path.join(STORAGE_THUMBNAILS_DIR, cand)) or os.path.exists(os.path.join(PUBLIC_THUMBNAILS_DIR, cand)):
-            return f"/thumbnails/{cand}"
+        s_path = os.path.join(STORAGE_THUMBNAILS_DIR, cand)
+        p_path = os.path.join(PUBLIC_THUMBNAILS_DIR, cand)
+        active_path = s_path if os.path.exists(s_path) else (p_path if os.path.exists(p_path) else None)
+        if active_path:
+            try:
+                mtime = int(os.path.getmtime(active_path))
+                return f"/thumbnails/{cand}?t={mtime}"
+            except Exception:
+                return f"/thumbnails/{cand}"
 
     return f"/thumbnails/{sign_id}.png" if sign_id else None
 
@@ -916,12 +924,36 @@ async def upload_curriculum_sign_photo(sign_id: str, photo: UploadFile = File(..
     p_ext = os.path.splitext(photo.filename)[1].lower() or ".png"
     photo_bytes = await photo.read()
     resolved_id = b.sign_id or b.stage_id
+
+    # Clean up any existing older variants across extensions to prevent shadowing
+    extensions_to_clean = [".png", ".jpg", ".jpeg", ".webp"]
+    prefixes_to_clean = []
+    if resolved_id is not None:
+        prefixes_to_clean.extend([f"{resolved_id}", f"thumb_{resolved_id}"])
+    if b.stage_id is not None:
+        prefixes_to_clean.extend([f"{b.stage_id}", f"thumb_{b.stage_id}"])
+    if b.sign_name:
+        prefixes_to_clean.extend([f"{b.sign_name}", f"thumb_{b.sign_name}"])
+
+    for pfx in prefixes_to_clean:
+        for ext in extensions_to_clean:
+            fname = f"{pfx}{ext}"
+            for d in [PUBLIC_THUMBNAILS_DIR, STORAGE_THUMBNAILS_DIR]:
+                full_p = os.path.join(d, fname)
+                if os.path.exists(full_p):
+                    try:
+                        os.remove(full_p)
+                    except Exception:
+                        pass
+
     saved_names = set()
     if resolved_id is not None:
         saved_names.add(f"{resolved_id}{p_ext}")
+        saved_names.add(f"{resolved_id}.png")
         saved_names.add(f"thumb_{resolved_id}.png")
     if b.stage_id is not None:
         saved_names.add(f"{b.stage_id}{p_ext}")
+        saved_names.add(f"{b.stage_id}.png")
         saved_names.add(f"thumb_{b.stage_id}.png")
     if b.sign_name:
         saved_names.add(f"{b.sign_name}{p_ext}")
@@ -935,11 +967,12 @@ async def upload_curriculum_sign_photo(sign_id: str, photo: UploadFile = File(..
             fb.write(photo_bytes)
 
     invalidate_curriculum_cache()
+    now_ts = int(time.time())
     primary_name = f"{resolved_id}{p_ext}" if resolved_id else f"{b.sign_name}{p_ext}"
     return {
         "status": "success",
         "sign_id": resolved_id,
-        "photo_url": f"/thumbnails/{primary_name}"
+        "photo_url": f"/thumbnails/{primary_name}?t={now_ts}"
     }
 
 @router.put("/curriculum-signs/{sign_id}", status_code=status.HTTP_200_OK)

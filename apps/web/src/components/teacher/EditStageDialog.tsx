@@ -1,7 +1,8 @@
 import { useState, useEffect, type FormEvent } from "react";
-import { Pencil, Trash2, X } from "lucide-react";
+import { Pencil, Trash2, X, Image as ImageIcon } from "lucide-react";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
+import EditStageThumbnailsDialog from "./EditStageThumbnailsDialog";
 import { updateStage, deleteStage } from "@/services/curriculum";
 import type { Stage } from "@/interfaces/curriculum.interface";
 
@@ -19,6 +20,7 @@ export default function EditStageDialog({ stage, onUpdated, onDeleted }: EditSta
   const [stageNumber, setStageNumber] = useState(stage.stage_number);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isThumbnailsOpen, setIsThumbnailsOpen] = useState(false);
 
   useEffect(() => {
     setTitle(stage.title);
@@ -145,6 +147,29 @@ export default function EditStageDialog({ stage, onUpdated, onDeleted }: EditSta
                 />
               </div>
 
+              {/* Visual Aid Thumbnails Quick Action */}
+              <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3.5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-2 rounded-xl bg-amber-100 text-amber-700 shrink-0">
+                    <ImageIcon className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-amber-950">Visual Aid Thumbnails</p>
+                    <p className="text-[11px] text-amber-800 truncate">
+                      Customize prompt illustrations shown in Lesson Proper
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setIsThumbnailsOpen(true)}
+                  className="px-2.5 py-1 text-xs shrink-0 bg-white text-amber-800 border-amber-300 hover:bg-amber-100 cursor-pointer"
+                >
+                  Manage
+                </Button>
+              </div>
+
               <div className="flex items-center justify-between pt-4 border-t border-gray-100">
                 <button
                   type="button"
@@ -203,6 +228,15 @@ export default function EditStageDialog({ stage, onUpdated, onDeleted }: EditSta
           </div>
         </div>
       )}
+      {/* Visual Aid Thumbnails Dialog */}
+      <EditStageThumbnailsDialog
+        isOpen={isThumbnailsOpen}
+        onClose={() => setIsThumbnailsOpen(false)}
+        stageId={stage.id}
+        stageTitle={stage.title}
+        stageNumber={stageNumber}
+        onUpdated={onUpdated}
+      />
     </>
   );
 }

@@ -4,10 +4,11 @@ import TopHeaderBar from "@/components/teacher/TopHeaderBar";
 import Button from "@/components/Button";
 import Separator from "@/components/Separator";
 import EditStageDialog from "@/components/teacher/EditStageDialog";
+import EditStageThumbnailsDialog from "@/components/teacher/EditStageThumbnailsDialog";
 import EditSignDialog from "@/components/teacher/EditSignDialog";
 import AddSignDialog from "@/components/teacher/AddSignDialog";
 import { fetchStageById } from "@/services/curriculum";
-import { ChevronLeft, Play, Video, FileText, CheckCircle2 } from "lucide-react";
+import { ChevronLeft, Play, Video, FileText, CheckCircle2, Image as ImageIcon } from "lucide-react";
 
 interface StageSign {
   id: string;
@@ -45,6 +46,8 @@ export default function TeacherStageItemPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeVideo, setActiveVideo] = useState<string | null>(null);
+  const [isThumbnailsModalOpen, setIsThumbnailsModalOpen] = useState(false);
+  const [focusSignId, setFocusSignId] = useState<string | number | undefined>(undefined);
 
   const loadStage = useCallback(() => {
     if (!stageId) return;
@@ -107,6 +110,19 @@ export default function TeacherStageItemPage() {
                 <CheckCircle2 className="size-3.5" />
                 Active Curriculum Stage
               </span>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => {
+                  setFocusSignId(undefined);
+                  setIsThumbnailsModalOpen(true);
+                }}
+                className="px-3 py-1.5 text-xs gap-1.5 bg-white text-gray-700 hover:text-(--primary) border-gray-300 hover:bg-amber-50 cursor-pointer"
+                title="Manage visual aid thumbnails for all signs in this stage"
+              >
+                <ImageIcon className="size-3.5 text-amber-500" />
+                <span>Visual Aid Thumbnails</span>
+              </Button>
               <EditStageDialog
                 stage={{
                   id: stage.id,
@@ -221,20 +237,33 @@ export default function TeacherStageItemPage() {
                               >
                                 {idx + 1}
                               </span>
-                              {sign.photo_url ? (
-                                <img
-                                  src={`http://localhost:8000${sign.photo_url}`}
-                                  alt={sign.sign_name}
-                                  className="size-10 rounded-lg object-contain bg-white border border-gray-200 p-0.5 shrink-0 shadow-2xs"
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).style.display = 'none';
-                                  }}
-                                />
-                              ) : (
-                                <div className="size-10 rounded-lg bg-gray-100 border border-gray-200 flex items-center justify-center text-xs text-gray-400 shrink-0">
-                                  🖼️
+                              <div
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setFocusSignId(sign.id || sign.sign_id);
+                                  setIsThumbnailsModalOpen(true);
+                                }}
+                                className="relative group size-10 rounded-lg overflow-hidden bg-white border border-gray-200 p-0.5 shrink-0 shadow-2xs cursor-pointer hover:border-(--primary) transition"
+                                title="Click to replace visual aid thumbnail"
+                              >
+                                {sign.photo_url ? (
+                                  <img
+                                    src={`http://localhost:8000${sign.photo_url}`}
+                                    alt={sign.sign_name}
+                                    className="h-full w-full object-contain"
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                  />
+                                ) : (
+                                  <div className="h-full w-full flex items-center justify-center text-xs text-gray-400 bg-gray-50">
+                                    🖼️
+                                  </div>
+                                )}
+                                <div className="absolute inset-0 bg-black/40 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity text-[9px] font-bold">
+                                  Edit
                                 </div>
-                              )}
+                              </div>
                               <div className="truncate">
                                 <p className="font-semibold text-sm truncate">{sign.sign_name}</p>
                                 <p className="text-xs text-gray-400 truncate">
@@ -271,6 +300,21 @@ export default function TeacherStageItemPage() {
             </div>
           </div>
         ) : null}
+        {stage && (
+          <EditStageThumbnailsDialog
+            isOpen={isThumbnailsModalOpen}
+            onClose={() => {
+              setIsThumbnailsModalOpen(false);
+              setFocusSignId(undefined);
+            }}
+            stageId={stage.id}
+            stageTitle={stage.title}
+            stageNumber={stage.stage_number}
+            initialSigns={stage.signs}
+            focusSignId={focusSignId}
+            onUpdated={loadStage}
+          />
+        )}
       </main>
     </div>
   );
