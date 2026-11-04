@@ -52,11 +52,15 @@ echo       [OK] Frontend built successfully.
 echo.
 
 :: 3. Stage Assets in Desktop Directory
-echo [2/4] Staging Frontend & Config Assets for Bundling...
+echo [2/4] Staging Frontend UI Assets (excluding heavy videos/thumbnails)...
 cd /d "%DESKTOP_DIR%"
 if exist "frontend_dist" rmdir /s /q "frontend_dist"
 xcopy /E /I /Y "%FRONTEND_DIR%\dist" "frontend_dist\" >nul
-echo       [OK] Staged frontend_dist.
+
+:: Strip heavy videos and thumbnails so they stream from cloud/backend without bloating the .exe
+if exist "frontend_dist\videos" rmdir /s /q "frontend_dist\videos"
+if exist "frontend_dist\thumbnails" rmdir /s /q "frontend_dist\thumbnails"
+echo       [OK] Staged lightweight frontend_dist (~25 MB).
 echo.
 
 :: 4. Run PyInstaller
@@ -94,3 +98,4 @@ echo To launch the app now, run:
 echo   "%DESKTOP_DIR%\dist\ELOCIA_Student\ELOCIA_Student.exe"
 echo.
 pause
+

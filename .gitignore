@@ -70,3 +70,6 @@ backend/storage/minigames/images/
 backend/storage/thumbnails/
 apps/student-desktop/frontend/public/thumbnails/
 
+
+apps/student-desktop/desktop/frontend_dist/
+apps/student-desktop/desktop/dist/
