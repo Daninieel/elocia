@@ -3,6 +3,7 @@ import './EvaluationSession.css';
 import { getStageData, getStageNumber } from '../../data/curriculum';
 import { saveScore, removeFocusDrillSign, resolveMediaUrl } from '../../utils/api';
 import { startEvaluationTour, stopCurrentTour } from '../../utils/activityTours';
+import { requestCameraStream, stopMediaStream } from '../../utils/cameraManager';
 
 const moveAwayMascot = '/images/Move away.png';
 const thinkingHandshape = '/images/Tier handshape thinking.png';
@@ -240,13 +241,8 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
   const [isCameraDisconnected, setIsCameraDisconnected] = useState<boolean>(false);
 
   const stopCameraTracks = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
-      streamRef.current = null;
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
+    stopMediaStream(streamRef.current, videoRef.current);
+    streamRef.current = null;
   };
 
   useEffect(() => {
@@ -256,18 +252,23 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
     async function enableCamera() {
       try {
         setIsCameraDisconnected(false);
-        stream = await navigator.mediaDevices.getUserMedia({
+        stream = await requestCameraStream({
           video: {
             width: { ideal: 640 },
             height: { ideal: 480 },
             frameRate: { ideal: 30, min: 24 }
           },
           audio: false,
-        });
+        }, () => cancelled);
+
+        if (cancelled || !stream) {
+          if (stream) stopMediaStream(stream);
+          return;
+        }
 
         streamRef.current = stream;
 
-        if (!cancelled && videoRef.current) {
+        if (videoRef.current) {
           videoRef.current.srcObject = stream;
         }
 
@@ -593,7 +594,7 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
       if (heartbeat) clearInterval(heartbeat);
       if (fallbackTimeout) clearTimeout(fallbackTimeout);
       if (rafNextFrame) cancelAnimationFrame(rafNextFrame);
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stopCameraTracks();
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
         ws.close();
       }
@@ -940,7 +941,7 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
           >
             {"\uD83D\uDD2C"}
           </button>
-          <button className="eval-settings-btn" type="button" aria-label="Settings" onClick={() => { sessionStorage.setItem('scrollToBug', 'true'); onNavigate?.('settings'); }}>{"\u2699\uFE0F"}</button>
+          <button className="eval-settings-btn" type="button" aria-label="Settings" onClick={() => { stopCameraTracks(); sessionStorage.setItem('scrollToBug', 'true'); onNavigate?.('settings'); }}>{"\u2699\uFE0F"}</button>
         </div>
       </header>
 
@@ -990,8 +991,17 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
                       className="eval-camera-reconnect-btn"
                       onClick={() => {
                         setIsCameraDisconnected(false);
-                        navigator.mediaDevices?.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, min: 24 } }, audio: false })
+                        stopMediaStream(streamRef.current, videoRef.current);
+                        requestCameraStream({
+                          video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, min: 24 } },
+                          audio: false,
+                        })
                           .then((stream) => {
+                            if (!stream) {
+                              setIsCameraDisconnected(true);
+                              return;
+                            }
+                            streamRef.current = stream;
                             if (videoRef.current) {
                               videoRef.current.srcObject = stream;
                             }

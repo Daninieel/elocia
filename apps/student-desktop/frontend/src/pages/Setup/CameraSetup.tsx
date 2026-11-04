@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react';
 import Navbar from '../../components/Sidebar/Sidebar';
+import { requestCameraStream, stopMediaStream } from '../../utils/cameraManager';
 import './CameraSetup.css';
 
 const sunImg = '/images/Sun.png';
@@ -43,6 +44,7 @@ const RightArrowIcon = () => (
 
 export default function CameraSetup({ onDone, onCancel }: CameraSetupProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -52,21 +54,22 @@ export default function CameraSetup({ onDone, onCancel }: CameraSetupProps) {
   const isCameraActive = step !== 'setup';
 
   useEffect(() => {
-    let stream: MediaStream | null = null;
+    let cancelled = false;
 
     if (isCameraActive) {
       async function enableCamera() {
         try {
-          if (!navigator.mediaDevices?.getUserMedia) {
-            console.error('Webcam access is not supported in this browser.');
+          const stream = await requestCameraStream(
+            { video: { width: 640, height: 480 }, audio: false },
+            () => cancelled
+          );
+
+          if (cancelled || !stream) {
+            if (stream) stopMediaStream(stream);
             return;
           }
 
-          stream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 640, height: 480 },
-            audio: false,
-          });
-
+          streamRef.current = stream;
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
           }
@@ -75,10 +78,15 @@ export default function CameraSetup({ onDone, onCancel }: CameraSetupProps) {
         }
       }
       enableCamera();
+    } else {
+      stopMediaStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
     }
 
     return () => {
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      cancelled = true;
+      stopMediaStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
     };
   }, [isCameraActive]);
 
@@ -255,14 +263,26 @@ export default function CameraSetup({ onDone, onCancel }: CameraSetupProps) {
         </div>
 
         <div className="bottom-split-nav-bar">
-          <button className="split-btn back-btn-side" onClick={onCancel}>
+          <button
+            className="split-btn back-btn-side"
+            onClick={() => {
+              stopMediaStream(streamRef.current, videoRef.current);
+              streamRef.current = null;
+              onCancel();
+            }}
+          >
             <LeftArrowIcon /> Back
           </button>
           <button
             className={`split-btn okay-btn-side ${isNextActive ? 'active-green' : 'disabled-state'}`}
             onClick={() => {
-              if (step === 'setup') setStep('not-detected');
-              else if (step === 'perfect') onDone();
+              if (step === 'setup') {
+                setStep('not-detected');
+              } else if (step === 'perfect') {
+                stopMediaStream(streamRef.current, videoRef.current);
+                streamRef.current = null;
+                onDone();
+              }
             }}
             disabled={!isNextActive}
           >

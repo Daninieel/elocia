@@ -1,24 +1,16 @@
 import { useState, useRef, useEffect } from 'react';
 
 import Sidebar from '../../components/Sidebar/Sidebar';
-
 import CameraSetup from '../Setup/CameraSetup';
-
 import MiniGameComplete from '../MiniGameComplete/MiniGameComplete';
-
 import {
-
   fetchMiniGameConfigs,
-
   fetchMiniGameActivities,
-
   saveMiniGameScore,
-
   resolveMediaUrl,
-
   type MiniGameConfigItem
-
 } from '../../utils/api';
+import { requestCameraStream, stopMediaStream } from '../../utils/cameraManager';
 
 import './SeeItSignIt.css';
 
@@ -253,6 +245,7 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
 
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -840,18 +833,20 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
 
         setIsCameraDisconnected(false);
 
-        stream = await navigator.mediaDevices.getUserMedia({
-
+        stream = await requestCameraStream({
           video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, min: 24 } },
-
           audio: false,
+        }, () => cancelled);
 
-        });
+        if (cancelled || !stream) {
+          if (stream) stopMediaStream(stream);
+          return;
+        }
 
-        if (!cancelled && videoRef.current) {
+        streamRef.current = stream;
 
+        if (videoRef.current) {
           videoRef.current.srcObject = stream;
-
         }
 
 
@@ -1348,7 +1343,9 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
 
       }
 
-      if (stream) stream.getTracks().forEach(t => t.stop());
+      cancelled = true;
+      stopMediaStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
 
       if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
 
@@ -1598,7 +1595,7 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
 
         <header className="eval-header-bar">
 
-          <button className="eval-back-btn" onClick={() => setView('menu')} type="button" aria-label="Back">
+          <button className="eval-back-btn" onClick={() => { stopMediaStream(streamRef.current, videoRef.current); streamRef.current = null; setView('menu'); }} type="button" aria-label="Back">
 
             <img src={backButtonImg} alt="Back" />
 
@@ -1665,11 +1662,10 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
             </button>
 
             <button className="eval-settings-btn" type="button" aria-label="Settings" onClick={() => { 
-
+              stopMediaStream(streamRef.current, videoRef.current);
+              streamRef.current = null;
               sessionStorage.setItem('scrollToBug', 'true'); 
-
               onNavigate('settings'); 
-
             }}>{"\u2699\uFE0F"}</button>
 
           </div>
@@ -1729,39 +1725,31 @@ export default function SeeItSignIt({ onNavigate }: SeeItSignItProps) {
                       </p>
 
                       <button
-
                         type="button"
-
                         className="eval-camera-reconnect-btn"
-
                         onClick={() => {
-
                           setIsCameraDisconnected(false);
-
-                          navigator.mediaDevices?.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, min: 24 } }, audio: false })
-
+                          stopMediaStream(streamRef.current, videoRef.current);
+                          requestCameraStream({
+                            video: { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30, min: 24 } },
+                            audio: false,
+                          })
                             .then((s) => {
-
+                              if (!s) {
+                                setIsCameraDisconnected(true);
+                                return;
+                              }
+                              streamRef.current = s;
                               if (videoRef.current) {
-
                                 videoRef.current.srcObject = s;
-
                               }
-
                               const track = s.getVideoTracks()[0];
-
                               if (track) {
-
                                 track.onended = () => setIsCameraDisconnected(true);
-
                               }
-
                             })
-
                             .catch(() => setIsCameraDisconnected(true));
-
                         }}
-
                       >
 
                         🔄 Reconnect Camera

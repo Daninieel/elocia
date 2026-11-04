@@ -15,6 +15,7 @@ import PuzzleSign from './pages/Mini Games/Puzzle Sign';
 import SeeItSignIt from './pages/Mini Games/SeeItSignIt';
 import MagicFingers from './pages/Mini Games/MagicFingers';
 import { fetchStudentProgress, fetchCurriculum } from './utils/api';
+import { stopAllActiveCameraStreams } from './utils/cameraManager';
 import type { Section } from './data/curriculum';
 import { CURRICULUM } from './data/curriculum';
 
@@ -83,6 +84,27 @@ function App() {
     refreshProgress();
   }, [currentView]);
 
+  // Camera Safety Watchdog: Ensure camera is completely killed when entering any non-camera view
+  useEffect(() => {
+    const cameraViews = ['evaluation', 'setup', 'puzzle-sign', 'see-it-sign-it', 'magic-fingers', 'settings'];
+    if (!cameraViews.includes(currentView)) {
+      stopAllActiveCameraStreams();
+    }
+  }, [currentView]);
+
+  // Global window unmount/close failsafe
+  useEffect(() => {
+    const handleUnload = () => {
+      stopAllActiveCameraStreams();
+    };
+    window.addEventListener('beforeunload', handleUnload);
+    window.addEventListener('pagehide', handleUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleUnload);
+      window.removeEventListener('pagehide', handleUnload);
+    };
+  }, []);
+
   // This function handles transitioning from Module 3 to Module 4
   const handleStartLesson = (stageId: number, practiceMode: boolean = false, drillSigns: string[] | null = null) => {
     setActiveStage(stageId);
@@ -96,6 +118,7 @@ function App() {
       const el = e.target as HTMLElement;
       // Logout button (sidebar, available on every page) -> back to Login
       if (el.closest('.nav-logout-btn')) {
+        stopAllActiveCameraStreams();
         setCurrentView('login');
         return;
       }

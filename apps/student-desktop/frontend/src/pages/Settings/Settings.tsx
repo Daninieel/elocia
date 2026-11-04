@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Sidebar from '../../components/Sidebar/Sidebar';
 import { updateUser } from '../../utils/api';
+import { requestCameraStream, stopMediaStream } from '../../utils/cameraManager';
 import './Settings.css';
 
 type View = 'navigation' | 'setup' | 'evaluation' | 'profile' | 'help' | 'settings' | 'achievements' | 'practice';
@@ -65,25 +66,31 @@ export default function Settings({ onNavigate }: { onNavigate?: (view: View) => 
 
   // ── Camera Stream ─────────────────────────────────────────────────────────
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   useEffect(() => {
-    let stream: MediaStream | null = null;
     let cancelled = false;
     async function enableCamera() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        console.warn('Camera access is not available in this environment.');
-        return;
-      }
       try {
-        const cameraStream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
-        if (cancelled) { cameraStream.getTracks().forEach(t => t.stop()); return; }
-        stream = cameraStream;
+        const cameraStream = await requestCameraStream(
+          { video: { width: 640, height: 480 }, audio: false },
+          () => cancelled
+        );
+        if (cancelled || !cameraStream) {
+          if (cameraStream) stopMediaStream(cameraStream);
+          return;
+        }
+        streamRef.current = cameraStream;
         if (videoRef.current) videoRef.current.srcObject = cameraStream;
       } catch (err) {
         console.error('Webcam access failed in Settings sandbox:', err);
       }
     }
     enableCamera();
-    return () => { cancelled = true; if (stream) stream.getTracks().forEach(t => t.stop()); };
+    return () => {
+      cancelled = true;
+      stopMediaStream(streamRef.current, videoRef.current);
+      streamRef.current = null;
+    };
   }, []);
 
   // ── Feedback Form State ───────────────────────────────────────────────────
