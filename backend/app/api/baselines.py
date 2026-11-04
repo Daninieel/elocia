@@ -16,6 +16,7 @@ from app.models.session import StudentStageProgress
 from app.models.user import User, UserRole, StudentProfile
 from app.models.classroom import EducationalVideo
 from app.schemas.baseline import BaselineResponse, BaselineUploadResult
+from app.core.supabase_storage import upload_to_supabase, get_public_url
 
 router = APIRouter()
 
@@ -92,6 +93,14 @@ async def upload_baseline_video(
         shutil.copyfileobj(video.file, f_out)
     shutil.copyfile(target_video_path, backup_video_path)
 
+    # 3c. Cloud Sync: upload video to Supabase Storage (dual-mode)
+    try:
+        with open(target_video_path, "rb") as f_vid:
+            v_bytes = f_vid.read()
+        await upload_to_supabase("videos", video_filename, v_bytes)
+    except Exception as sup_v_err:
+        print(f"[Supabase Upload Warning - Video]: {sup_v_err}")
+
     # 3b. Save custom photo/thumbnail if provided, or auto-extract from video
     try:
         if photo and photo.filename:
@@ -124,6 +133,21 @@ async def upload_baseline_video(
             await asyncio.to_thread(extract_thumb)
     except Exception as img_err:
         pass
+
+    # 3d. Cloud Sync: upload thumbnail to Supabase Storage
+    try:
+        t_cand = os.path.join(PUBLIC_THUMBNAILS_DIR, f"{resolved_sign_id}.png")
+        if not os.path.exists(t_cand):
+            t_cand = os.path.join(PUBLIC_THUMBNAILS_DIR, f"{stage_id}.png")
+        if os.path.exists(t_cand):
+            with open(t_cand, "rb") as f_th:
+                t_bytes = f_th.read()
+            await upload_to_supabase("thumbnails", f"{resolved_sign_id}.png", t_bytes)
+            await upload_to_supabase("thumbnails", f"{stage_id}.png", t_bytes)
+            if sign_name:
+                await upload_to_supabase("thumbnails", f"{sign_name}.png", t_bytes)
+    except Exception as sup_th_err:
+        print(f"[Supabase Upload Warning - Thumbnail]: {sup_th_err}")
 
     # 4. Output baseline JSON target paths
     target_json_filename = f"baseline_{stage_id}.json"
@@ -173,9 +197,19 @@ async def upload_baseline_video(
                 detail=f"Internal error processing video landmarks: {str(in_proc_err)}"
             )
 
-    # Copy generated baseline to backend storage backup
+    # Copy generated baseline to backend storage backup & Supabase Storage
     if os.path.exists(desktop_json_path):
         shutil.copyfile(desktop_json_path, backup_json_path)
+        try:
+            with open(desktop_json_path, "rb") as f_js:
+                j_bytes = f_js.read()
+            await upload_to_supabase("baselines", target_json_filename, j_bytes)
+            if resolved_sign_id != stage_id:
+                await upload_to_supabase("baselines", f"baseline_{resolved_sign_id}.json", j_bytes)
+            if sign_name:
+                await upload_to_supabase("baselines", f"baseline_{sign_name}.json", j_bytes)
+        except Exception as sup_js_err:
+            print(f"[Supabase Upload Warning - Baseline JSON]: {sup_js_err}")
     
     # Invalidate curriculum cache so new visual aid / video is instantly active
     try:

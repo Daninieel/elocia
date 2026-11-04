@@ -353,6 +353,7 @@ export default function ParentHomePage() {
                           setSelectedStageForAnalytics({
                             stageId: targetStageId,
                             title: `Stage ${stage.stageNumber}${stage.subtitle ? ` - ${stage.subtitle}` : ""}`,
+                            relativeStageNum: stage.stageNumber,
                           });
                         }}
                         className={`flex flex-col items-center justify-center w-24 h-32 rounded-2xl transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95 focus:outline-none ${

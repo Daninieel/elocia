@@ -8,6 +8,7 @@ import sys
 import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from threading import Thread
 
 from inference import evaluate_sign
@@ -15,7 +16,15 @@ from services.camera_check import analyze_camera_frame
 from services.analytics_logger import log_evaluation_attempt, init_analytics_log
 import time
 
-app = FastAPI()
+def get_asset_path(*rel_parts):
+    """Resolves asset paths whether running directly in Python or frozen inside PyInstaller."""
+    if getattr(sys, 'frozen', False):
+        base = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.abspath(os.path.join(base, *rel_parts))
+
+app = FastAPI(title="ELOCIA Student Desktop Engine")
 
 # Initialize analytics log on startup
 init_analytics_log()
@@ -27,6 +36,51 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/app-config")
+async def get_app_config():
+    """
+    Returns runtime configuration (such as the teacher's backend API URL)
+    from server_config.json located in the application directory.
+    """
+    app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
+    config_paths = [
+        os.path.join(app_dir, "server_config.json"),
+        get_asset_path("server_config.json"),
+    ]
+    api_url = "http://127.0.0.1:8000"
+    for cp in config_paths:
+        if os.path.exists(cp):
+            try:
+                with open(cp, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "api_url" in data and data["api_url"]:
+                        api_url = data["api_url"].strip().rstrip("/")
+                        break
+            except Exception as e:
+                print(f"[Warning] Failed reading {cp}: {e}")
+
+    return {
+        "api_url": api_url,
+        "is_frozen": getattr(sys, 'frozen', False),
+    }
+
+
+@app.post("/app-config")
+async def save_app_config(payload: dict):
+    """Allows updating server IP directly from the UI without manually editing files."""
+    new_url = payload.get("api_url", "").strip().rstrip("/")
+    if not new_url:
+        return {"status": "error", "message": "Invalid API URL"}
+    app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
+    cfg_path = os.path.join(app_dir, "server_config.json")
+    try:
+        with open(cfg_path, "w", encoding="utf-8") as f:
+            json.dump({"api_url": new_url}, f, indent=2)
+        return {"status": "success", "api_url": new_url}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 @app.websocket("/ws/camera-check")
@@ -75,7 +129,10 @@ def resolve_baseline_file(stage_id, activity_type="evaluation"):
     2. Lessons: baselines/lessons/baseline_<id>.json
     3. Root fallback & backend storage fallback for complete compatibility
     """
+    app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
     base_dirs = [
+        os.path.join(app_dir, 'baselines'),
+        get_asset_path('baselines'),
         os.path.abspath(os.path.join(os.path.dirname(__file__), 'baselines')),
         os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend', 'storage', 'baselines'))
     ]
@@ -140,6 +197,28 @@ def resolve_baseline_file(stage_id, activity_type="evaluation"):
             full_path = os.path.abspath(os.path.join(bdir, rel))
             if os.path.exists(full_path):
                 return full_path
+
+    # Cloud Sync Fallback: Download on-demand from Supabase if not present on this device
+    cloud_url_base = os.getenv("SUPABASE_PUBLIC_STORAGE_URL", "https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/baselines")
+    dest_dir = os.path.join(app_dir, 'baselines', 'lessons')
+    os.makedirs(dest_dir, exist_ok=True)
+
+    for sid in alt_ids:
+        cloud_file = f"baseline_{sid}.json"
+        cloud_url = f"{cloud_url_base}/{cloud_file}"
+        dest_path = os.path.join(dest_dir, cloud_file)
+        try:
+            import urllib.request
+            req = urllib.request.Request(cloud_url, headers={"User-Agent": "ELOCIA-Desktop/1.0"})
+            with urllib.request.urlopen(req, timeout=3) as resp:
+                if resp.status == 200:
+                    data = resp.read()
+                    with open(dest_path, "wb") as f_out:
+                        f_out.write(data)
+                    print(f"[Cloud Baseline Sync] Downloaded and cached {cloud_file} from Supabase")
+                    return dest_path
+        except Exception:
+            pass
 
     return None
 
@@ -438,6 +517,27 @@ async def evaluate_endpoint(websocket: WebSocket):
     except Exception as e:
         print(f"Evaluation WS error: {e}")
 
+# Mount compiled React frontend onto FastAPI (served on port 8001)
+frontend_dist_dirs = [
+    get_asset_path("frontend_dist"),
+    get_asset_path("dist"),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend_dist")),
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")),
+]
+
+active_frontend_dir = None
+for d in frontend_dist_dirs:
+    if os.path.exists(d) and os.path.exists(os.path.join(d, "index.html")):
+        active_frontend_dir = d
+        break
+
+if active_frontend_dir:
+    print(f"[Desktop UI] Mounting compiled frontend from: {active_frontend_dir}")
+    app.mount("/", StaticFiles(directory=active_frontend_dir, html=True), name="frontend")
+else:
+    print("[Desktop UI Warning] Compiled frontend dist not found. Operating in API-only / dev mode.")
+
+
 def run_api():
     print("Starting Desktop API on port 8001...")
     uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
@@ -456,13 +556,27 @@ if __name__ == '__main__':
         import time
         time.sleep(1)
 
+        # Determine target window URL:
+        # In packaged/frozen mode, or when Vite dev server is not running, point to 8001
+        target_url = "http://127.0.0.1:8001"
+        if not getattr(sys, 'frozen', False):
+            import urllib.request
+            try:
+                urllib.request.urlopen("http://localhost:5173", timeout=0.8)
+                target_url = "http://localhost:5173"
+                print("[Desktop Mode] Connected to active Vite Dev Server on http://localhost:5173")
+            except Exception:
+                print("[Desktop Mode] Vite dev server not detected, using embedded UI on http://127.0.0.1:8001")
+        else:
+            print("[Desktop Mode] Running in packaged standalone mode on http://127.0.0.1:8001")
+
         try:
             webview.create_window(
                 "ELOCIA",
-                "http://localhost:5173",
+                target_url,
                 width=1920,
                 height=1080,
-                resizable=False,
+                resizable=True,
             )
             webview.start()
         except Exception as e:

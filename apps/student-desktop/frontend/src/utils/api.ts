@@ -1,4 +1,7 @@
-function getApiBase(): string {
+export function getApiBase(): string {
+  if (typeof window !== 'undefined' && (window as any).__ELOCIA_API_URL__) {
+    return (window as any).__ELOCIA_API_URL__;
+  }
   const custom = typeof window !== 'undefined' ? localStorage.getItem('elocia_api_host') : null;
   if (custom && custom.trim()) {
     return custom.trim().replace(/\/+$/, '');
@@ -10,7 +13,40 @@ function getApiBase(): string {
   return 'http://127.0.0.1:8000';
 }
 
-export const API_BASE = getApiBase();
+export function setApiBase(url: string) {
+  if (typeof window !== 'undefined') {
+    let clean = url.trim().replace(/\/+$/, '');
+    if (!clean.startsWith('http://') && !clean.startsWith('https://')) {
+      clean = 'http://' + clean;
+    }
+    localStorage.setItem('elocia_api_host', clean);
+    (window as any).__ELOCIA_API_URL__ = clean;
+    fetch('http://127.0.0.1:8001/app-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_url: clean }),
+    }).catch(() => {});
+  }
+}
+
+if (typeof window !== 'undefined') {
+  fetch('http://127.0.0.1:8001/app-config')
+    .then((res) => res.json())
+    .then((data) => {
+      if (data && data.api_url) {
+        if (!localStorage.getItem('elocia_api_host')) {
+          localStorage.setItem('elocia_api_host', data.api_url);
+        }
+        (window as any).__ELOCIA_API_URL__ = localStorage.getItem('elocia_api_host') || data.api_url;
+      }
+    })
+    .catch(() => {});
+}
+
+export const API_BASE = {
+  toString: () => getApiBase(),
+  valueOf: () => getApiBase(),
+} as any as string;
 
 /**
  * Normalizes image and video URLs returned by the backend.

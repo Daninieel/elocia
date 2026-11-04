@@ -966,6 +966,14 @@ async def upload_curriculum_sign_photo(sign_id: str, photo: UploadFile = File(..
         with open(os.path.join(STORAGE_THUMBNAILS_DIR, name), "wb") as fb:
             fb.write(photo_bytes)
 
+    # Cloud Sync: upload thumbnail to Supabase Storage (dual-mode)
+    try:
+        from app.core.supabase_storage import upload_to_supabase
+        for name in saved_names:
+            await upload_to_supabase("thumbnails", name, photo_bytes)
+    except Exception as sup_err:
+        print(f"[Supabase Thumbnail Upload Warning]: {sup_err}")
+
     invalidate_curriculum_cache()
     now_ts = int(time.time())
     primary_name = f"{resolved_id}{p_ext}" if resolved_id else f"{b.sign_name}{p_ext}"
