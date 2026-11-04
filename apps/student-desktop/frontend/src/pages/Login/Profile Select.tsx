@@ -7,10 +7,18 @@ const logoImg = '/images/logo-icon.png';
 interface ProfileSelectProps {
   students: StudentProfile[];
   onSelectStudent: (student: StudentProfile) => void;
+  onBack?: () => void;
+  onRetry?: () => void;
+  connectionStatus?: 'connecting' | 'connected' | 'error';
 }
 
-export default function ProfileSelect({ students, onSelectStudent }: ProfileSelectProps) {
-  // Option 1: 5 students per page in a clean, single row
+export default function ProfileSelect({
+  students,
+  onSelectStudent,
+  onBack,
+  onRetry,
+  connectionStatus,
+}: ProfileSelectProps) {
   const PAGE_SIZE = 5;
   const [currentPage, setCurrentPage] = useState(0);
 
@@ -47,6 +55,32 @@ export default function ProfileSelect({ students, onSelectStudent }: ProfileSele
       </div>
 
       <div className="ps-content">
+        {/* Top Back Navigation */}
+        {onBack && (
+          <div style={{ width: '100%', maxWidth: '800px', display: 'flex', justifyContent: 'flex-start', marginBottom: '8px' }}>
+            <button
+              type="button"
+              onClick={onBack}
+              style={{
+                background: 'rgba(255, 255, 255, 0.85)',
+                border: '1px solid #E2E8F0',
+                borderRadius: '12px',
+                padding: '8px 16px',
+                fontSize: '13px',
+                fontWeight: 700,
+                color: '#475569',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.04)',
+              }}
+            >
+              {"\u2190"} Back
+            </button>
+          </div>
+        )}
+
         {/* Logo */}
         <div className="ps-logo-card">
           <img src={logoImg} alt="ELOCIA" className="ps-logo-img" />
@@ -56,56 +90,100 @@ export default function ProfileSelect({ students, onSelectStudent }: ProfileSele
         <h1 className="ps-heading">Who's playing?</h1>
         <p className="ps-subtext">Tap your picture to start learning!</p>
 
-        {/* Profile Carousel Row */}
-        <div className="ps-carousel-wrapper">
-          {totalPages > 1 && (
-            <button
-              className="ps-nav-arrow ps-prev-arrow"
-              onClick={handlePrev}
-              disabled={currentPage === 0}
-              type="button"
-              aria-label="Previous Page"
-            >
-              {"\u25C0"}
-            </button>
-          )}
-
-          <div className="ps-grid">
-            {visibleStudents.map((student) => (
-              <button
-                key={student.id}
-                className="ps-card"
-                onClick={() => onSelectStudent(student)}
-                type="button"
-              >
-                <div className="ps-avatar" style={{ backgroundColor: student.color, overflow: 'hidden' }}>
-                  {student.emoji && (student.emoji.startsWith('data:') || student.emoji.startsWith('http') || student.emoji.startsWith('/')) ? (
-                    <img src={student.emoji} alt={student.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
-                  ) : (
-                    <span className="ps-avatar-emoji">{student.emoji || "\uD83D\uDC66"}</span>
-                  )}
-                </div>
-                <span className="ps-name">{student.name}</span>
-                <span className="ps-code-badge">{student.student_code || `G${student.grade_level || 1}-01`}</span>
-              </button>
-            ))}
+        {/* Profile Carousel Row or Graceful Retry State */}
+        {students.length === 0 ? (
+          <div
+            style={{
+              textAlign: 'center',
+              padding: '32px 24px',
+              background: 'rgba(255,255,255,0.85)',
+              borderRadius: '24px',
+              maxWidth: '440px',
+              margin: '24px auto',
+              boxShadow: '0 10px 25px rgba(0,0,0,0.06)',
+            }}
+          >
+            <p style={{ fontSize: '17px', fontWeight: 800, color: '#1E293B', marginBottom: '8px' }}>
+              {connectionStatus === 'connecting' ? 'Connecting to Cloud...' : 'No students found'}
+            </p>
+            <p style={{ fontSize: '13px', color: '#64748B', marginBottom: '20px', lineHeight: 1.5 }}>
+              {connectionStatus === 'connecting'
+                ? 'Contacting ELOCIA Cloud Database on Supabase...'
+                : 'Could not load student accounts. Please check your internet connection and try again.'}
+            </p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'center' }}>
+              {onRetry && (
+                <button
+                  type="button"
+                  onClick={onRetry}
+                  style={{
+                    padding: '10px 22px',
+                    borderRadius: '12px',
+                    border: 'none',
+                    background: '#FF8A00',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '14px',
+                    cursor: 'pointer',
+                    boxShadow: '0 4px 10px rgba(255,138,0,0.3)',
+                  }}
+                >
+                  {"\uD83D\uDD04"} Refresh
+                </button>
+              )}
+            </div>
           </div>
+        ) : (
+          <div className="ps-carousel-wrapper">
+            {totalPages > 1 && (
+              <button
+                className="ps-nav-arrow ps-prev-arrow"
+                onClick={handlePrev}
+                disabled={currentPage === 0}
+                type="button"
+                aria-label="Previous Page"
+              >
+                {"\u25C0"}
+              </button>
+            )}
 
-          {totalPages > 1 && (
-            <button
-              className="ps-nav-arrow ps-next-arrow"
-              onClick={handleNext}
-              disabled={currentPage === totalPages - 1}
-              type="button"
-              aria-label="Next Page"
-            >
-              {"\u25B6"}
-            </button>
-          )}
-        </div>
+            <div className="ps-grid">
+              {visibleStudents.map((student) => (
+                <button
+                  key={student.id}
+                  className="ps-card"
+                  onClick={() => onSelectStudent(student)}
+                  type="button"
+                >
+                  <div className="ps-avatar" style={{ backgroundColor: student.color, overflow: 'hidden' }}>
+                    {student.emoji && (student.emoji.startsWith('data:') || student.emoji.startsWith('http') || student.emoji.startsWith('/')) ? (
+                      <img src={student.emoji} alt={student.name} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }} />
+                    ) : (
+                      <span className="ps-avatar-emoji">{student.emoji || "\uD83D\uDC66"}</span>
+                    )}
+                  </div>
+                  <span className="ps-name">{student.name}</span>
+                  <span className="ps-code-badge">{student.student_code || `G${student.grade_level || 1}-01`}</span>
+                </button>
+              ))}
+            </div>
+
+            {totalPages > 1 && (
+              <button
+                className="ps-nav-arrow ps-next-arrow"
+                onClick={handleNext}
+                disabled={currentPage === totalPages - 1}
+                type="button"
+                aria-label="Next Page"
+              >
+                {"\u25B6"}
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Page Dots Indicator */}
-        {totalPages > 1 && (
+        {totalPages > 1 && students.length > 0 && (
           <div className="ps-pagination-dots">
             {Array.from({ length: totalPages }, (_, i) => (
               <button

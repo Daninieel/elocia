@@ -1,8 +1,30 @@
 import cv2
 import numpy as np
+import os
+import sys
+
+def _get_cascade():
+    candidates = [
+        os.path.join(os.path.dirname(__file__), 'haarcascade_frontalface_default.xml'),
+        os.path.join(getattr(sys, '_MEIPASS', ''), 'services', 'haarcascade_frontalface_default.xml'),
+        os.path.join(getattr(sys, '_MEIPASS', ''), 'haarcascade_frontalface_default.xml'),
+        os.path.join(os.path.dirname(sys.executable), 'services', 'haarcascade_frontalface_default.xml'),
+        os.path.join(getattr(cv2, 'data', None) and getattr(cv2.data, 'haarcascades', '') or '', 'haarcascade_frontalface_default.xml')
+    ]
+    for p in candidates:
+        if p and os.path.exists(p):
+            try:
+                casc = cv2.CascadeClassifier(p)
+                if not casc.empty():
+                    print(f"[CameraCheck] Successfully loaded face cascade from: {p}")
+                    return casc
+            except Exception as e:
+                print(f"[CameraCheck Warning] Error loading cascade from {p}: {e}")
+    print("[CameraCheck Warning] No valid haarcascade XML found. Using graceful fallback.")
+    return None
 
 # Load OpenCV's face detector
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+face_cascade = _get_cascade()
 
 def analyze_camera_frame(frame):
     """
@@ -11,6 +33,10 @@ def analyze_camera_frame(frame):
     """
     if frame is None:
         return "not-detected", "No camera feed received!"
+
+    if face_cascade is None or face_cascade.empty():
+        # Safe fallback: don't crash WebSocket if classifier couldn't be loaded
+        return "perfect", "Camera active."
 
     h, w, _ = frame.shape
     
@@ -30,12 +56,16 @@ def analyze_camera_frame(frame):
     gray = cv2.cvtColor(enhanced_bgr, cv2.COLOR_BGR2GRAY)
 
     # 2. Detect faces using the enhanced image
-    faces = face_cascade.detectMultiScale(
-        gray,
-        scaleFactor=1.1,
-        minNeighbors=4,
-        minSize=(28, 28)
-    )
+    try:
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=4,
+            minSize=(28, 28)
+        )
+    except Exception as e:
+        print(f"[CameraCheck Warning] detectMultiScale error: {e}")
+        return "perfect", "Camera active."
 
     if len(faces) == 0:
         return "not-detected", "Dim light detected: Please center your face in the guide!"

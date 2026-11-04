@@ -33,6 +33,11 @@ export default function Login({ onStart }: LoginProps) {
 
   useEffect(() => {
     loadStudents();
+    const handleUrlReady = () => {
+      loadStudents();
+    };
+    window.addEventListener('elocia-api-url-ready', handleUrlReady);
+    return () => window.removeEventListener('elocia-api-url-ready', handleUrlReady);
   }, []);
 
   const handleSaveServer = (e: React.FormEvent) => {
@@ -147,14 +152,14 @@ export default function Login({ onStart }: LoginProps) {
                 Server Connection
               </h3>
               <p style={{ margin: '0 0 16px 0', fontSize: '13px', color: '#64748B' }}>
-                Enter the backend server IP (e.g. teacher's laptop IP: <code>http://192.168.1.50:8000</code>):
+                Enter the backend server IP or cloud URL:
               </p>
               <form onSubmit={handleSaveServer}>
                 <input
                   type="text"
                   value={serverInput}
                   onChange={(e) => setServerInput(e.target.value)}
-                  placeholder="http://192.168.1.50:8000"
+                  placeholder="https://elocia.onrender.com"
                   style={{
                     width: '100%',
                     padding: '10px 14px',
@@ -220,6 +225,9 @@ export default function Login({ onStart }: LoginProps) {
     <ProfileSelect
       students={students}
       onSelectStudent={handleSelectStudent}
+      onBack={() => setView('welcome')}
+      onRetry={loadStudents}
+      connectionStatus={connectionStatus}
     />
   );
 }

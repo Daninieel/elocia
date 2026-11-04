@@ -49,15 +49,17 @@ async def get_app_config():
         os.path.join(app_dir, "server_config.json"),
         get_asset_path("server_config.json"),
     ]
-    api_url = "http://127.0.0.1:8000"
+    api_url = "https://elocia.onrender.com"
     for cp in config_paths:
         if os.path.exists(cp):
             try:
                 with open(cp, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     if "api_url" in data and data["api_url"]:
-                        api_url = data["api_url"].strip().rstrip("/")
-                        break
+                        candidate = data["api_url"].strip().rstrip("/")
+                        if candidate and not candidate.startswith("http://127.0.0.1:8000") and not candidate.startswith("http://localhost:8000"):
+                            api_url = candidate
+                            break
             except Exception as e:
                 print(f"[Warning] Failed reading {cp}: {e}")
 

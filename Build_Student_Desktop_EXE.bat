@@ -79,6 +79,10 @@ echo [4/4] Finalizing Distribution Package...
 if exist "server_config.json" (
     copy /Y "server_config.json" "dist\ELOCIA_Student\server_config.json" >nul
 )
+if exist "services\haarcascade_frontalface_default.xml" (
+    if not exist "dist\ELOCIA_Student\services" mkdir "dist\ELOCIA_Student\services"
+    copy /Y "services\haarcascade_frontalface_default.xml" "dist\ELOCIA_Student\services\haarcascade_frontalface_default.xml" >nul
+)
 
 echo       Creating ZIP archive: dist\ELOCIA_Student_Desktop.zip ...
 powershell -Command "Compress-Archive -Path 'dist\ELOCIA_Student' -DestinationPath 'dist\ELOCIA_Student_Desktop.zip' -Force" >nul 2>&1

@@ -1,16 +1,20 @@
+const CLOUD_FALLBACK_URL = 'https://elocia.onrender.com';
+const SUPABASE_CDN_FALLBACK = 'https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media';
+
 export function getApiBase(): string {
   if (typeof window !== 'undefined' && (window as any).__ELOCIA_API_URL__) {
     return (window as any).__ELOCIA_API_URL__;
   }
   const custom = typeof window !== 'undefined' ? localStorage.getItem('elocia_api_host') : null;
-  if (custom && custom.trim()) {
+  // If localStorage still holds stale local 127.0.0.1:8000, ignore it and use live cloud default
+  if (custom && custom.trim() && !custom.includes('127.0.0.1:8000') && !custom.includes('localhost:8000')) {
     return custom.trim().replace(/\/+$/, '');
   }
   const envUrl = (import.meta as any).env?.VITE_API_URL;
-  if (envUrl && envUrl.trim()) {
+  if (envUrl && envUrl.trim() && !envUrl.includes('127.0.0.1:8000') && !envUrl.includes('localhost:8000')) {
     return envUrl.trim().replace(/\/+$/, '');
   }
-  return 'http://127.0.0.1:8000';
+  return CLOUD_FALLBACK_URL;
 }
 
 export function setApiBase(url: string) {
@@ -34,13 +38,21 @@ if (typeof window !== 'undefined') {
     .then((res) => res.json())
     .then((data) => {
       if (data && data.api_url) {
-        if (!localStorage.getItem('elocia_api_host')) {
-          localStorage.setItem('elocia_api_host', data.api_url);
+        const clean = data.api_url.trim().replace(/\/+$/, '');
+        // Prioritize active non-local server_config.json over stale cache
+        if (clean && !clean.includes('127.0.0.1:8000') && !clean.includes('localhost:8000')) {
+          localStorage.setItem('elocia_api_host', clean);
+          (window as any).__ELOCIA_API_URL__ = clean;
+        } else {
+          localStorage.setItem('elocia_api_host', CLOUD_FALLBACK_URL);
+          (window as any).__ELOCIA_API_URL__ = CLOUD_FALLBACK_URL;
         }
-        (window as any).__ELOCIA_API_URL__ = localStorage.getItem('elocia_api_host') || data.api_url;
+        window.dispatchEvent(new Event('elocia-api-url-ready'));
       }
     })
-    .catch(() => {});
+    .catch(() => {
+      (window as any).__ELOCIA_API_URL__ = CLOUD_FALLBACK_URL;
+    });
 }
 
 export const API_BASE = {
@@ -62,14 +74,28 @@ export function resolveMediaUrl(url: string | null | undefined): string | null {
     return trimmed.replace(/^http:\/\/(localhost|127\.0\.0\.1):8000/, API_BASE);
   }
 
-  // Relative path starting with slash (e.g. /minigames/images/...)
-  if (trimmed.startsWith('/')) {
-    return `${API_BASE}${trimmed}`;
-  }
-
   // Already a full external URL
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
     return trimmed;
+  }
+
+  // Direct Supabase CDN resolution for static folders
+  if (trimmed.startsWith('/thumbnails/')) {
+    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+  }
+  if (trimmed.startsWith('/videos/')) {
+    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+  }
+  if (trimmed.startsWith('/minigames/images/')) {
+    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+  }
+  if (trimmed.startsWith('/minigames/videos/')) {
+    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+  }
+
+  // Relative path starting with slash (e.g. /minigames/images/...)
+  if (trimmed.startsWith('/')) {
+    return `${API_BASE}${trimmed}`;
   }
 
   // Relative path without leading slash
@@ -409,5 +435,3 @@ export async function removeFocusDrillSign(studentId: string, sign: string): Pro
     console.warn('Failed to remove focus drill sign:', err);
   }
 }
-
-

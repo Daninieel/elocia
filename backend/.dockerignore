@@ -10,3 +10,4 @@ elocia.db
 *.db-journal
 tests/
 .pytest_cache/
+
