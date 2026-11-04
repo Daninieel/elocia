@@ -126,3 +126,4 @@ export function stopAllActiveCameraStreams(): void {
     console.warn('[CameraManager] Error inspecting DOM video elements:', err);
   }
 }
+
