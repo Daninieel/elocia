@@ -1,6 +1,6 @@
 import React from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
-import { getActivePortal } from "./config/portal.ts";
+import { getActivePortal, getPortalTitle } from "./config/portal.ts";
 import { tokenManager, isTokenExpired, getRoleFromToken } from "./helpers/jwt.ts";
 
 import LandingPage from "./pages/LandingPage.tsx";
@@ -230,6 +230,10 @@ const renderAdminRoutes = () => (
 
 function App() {
   const portal = getActivePortal();
+
+  React.useEffect(() => {
+    document.title = getPortalTitle();
+  }, [portal]);
 
   return (
     <BrowserRouter>

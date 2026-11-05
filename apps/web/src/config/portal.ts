@@ -25,6 +25,18 @@ export function getActivePortal(): PortalType {
   return "all";
 }
 
+export function getPortalTitle(subpage?: string): string {
+  const portal = getActivePortal();
+  const titles: Record<PortalType, string> = {
+    teacher: "ELOCIA | Teacher Portal",
+    parent: "ELOCIA | Parent Portal",
+    admin: "ELOCIA | Admin Portal",
+    all: "ELOCIA - Filipino Sign Language Learning System",
+  };
+  const base = titles[portal] || "ELOCIA";
+  return subpage ? `${subpage} - ${base}` : base;
+}
+
 export const activePortal = getActivePortal();
 export const isTeacherPortal = () => activePortal === "teacher";
 export const isParentPortal = () => activePortal === "parent";
