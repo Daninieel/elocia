@@ -5,7 +5,7 @@ import type {
 } from "@/interfaces/parent.interface";
 import { extractApiErrorMessage } from "@/helpers/error";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 /**
  * Fetch all students linked to the authenticated parent.

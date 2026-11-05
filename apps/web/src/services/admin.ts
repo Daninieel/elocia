@@ -1,7 +1,7 @@
 import { tokenManager } from "@/helpers/jwt";
 import { extractApiErrorMessage } from "@/helpers/error";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 function getAuthHeaders(): HeadersInit {
   const token = tokenManager.getAccessToken();

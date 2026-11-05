@@ -5,7 +5,7 @@ import type {
   Unit,
 } from "@/interfaces/curriculum.interface";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 export async function fetchCurriculums(): Promise<Curriculum[]> {
   const response: Response = await fetch(`${API_BASE_URL}/curriculums`, {

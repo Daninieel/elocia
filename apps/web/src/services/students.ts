@@ -1,7 +1,7 @@
 import type { Student } from "@/interfaces/student.interface";
 import { extractApiErrorMessage } from "@/helpers/error";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 export type CreateStudentPayload = {
   name: string;

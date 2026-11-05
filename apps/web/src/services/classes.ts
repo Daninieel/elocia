@@ -1,7 +1,7 @@
 import { getIdFromToken, tokenManager } from "@/helpers/jwt";
 import type { Class, Roster } from "@/interfaces/class.interface";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 export type CreateClassPayload = {
   name: string;

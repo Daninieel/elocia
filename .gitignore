@@ -32,6 +32,9 @@ env/
 .env
 .env.*
 !.env.example
+!apps/web/.env.admin
+!apps/web/.env.teacher
+!apps/web/.env.parent
 
 # PyInstaller
 build/

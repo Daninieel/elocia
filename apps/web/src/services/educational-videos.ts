@@ -1,6 +1,6 @@
 import type { EducationalVideo } from "@/interfaces/educational-video.interface";
 
-const API_BASE_URL = "http://localhost:8000";
+import { API_BASE_URL } from "@/config/api";
 
 export type CreateEducationalVideoPayload = {
   title: string;
