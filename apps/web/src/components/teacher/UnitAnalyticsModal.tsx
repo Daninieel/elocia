@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { X, Sparkles, AlertCircle, Dumbbell, CheckCircle2 } from "lucide-react";
+import { API_BASE_URL } from "@/config/api";
 
 interface UnitAnalyticsModalProps {
   studentId: string;
@@ -115,7 +116,7 @@ export default function UnitAnalyticsModal({
     const attemptQuery = activeAttemptNum ? `&attempt_index=${activeAttemptNum}` : "";
     
     const fetchAnalytics = async () => {
-      const bases = ["http://localhost:8000", "https://elocia.onrender.com"];
+      const bases = Array.from(new Set([API_BASE_URL, "https://elocia.onrender.com", "http://localhost:8000"]));
       for (const base of bases) {
         try {
           const res = await fetch(`${base}/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`);
@@ -215,7 +216,7 @@ export default function UnitAnalyticsModal({
       let createdDrill: any = null;
       let atLeastOneSuccess = false;
 
-      const endpoints = ["http://localhost:8000", "https://elocia.onrender.com"];
+      const endpoints = Array.from(new Set([API_BASE_URL, "https://elocia.onrender.com", "http://localhost:8000"]));
 
       for (const base of endpoints) {
         try {
@@ -266,10 +267,11 @@ export default function UnitAnalyticsModal({
     setIsCancellingDrill(true);
     setDrillError(null);
     try {
-      fetch(`http://localhost:8000/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
-      fetch(`http://localhost:8000/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
-      fetch(`https://elocia.onrender.com/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
-      fetch(`https://elocia.onrender.com/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
+      const endpoints = Array.from(new Set([API_BASE_URL, "https://elocia.onrender.com", "http://localhost:8000"]));
+      endpoints.forEach((base) => {
+        fetch(`${base}/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
+        fetch(`${base}/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
+      });
       setActiveDrill(null);
       setDrillSuccess(false);
     } catch (e) {

@@ -170,6 +170,7 @@ def main():
         folder_prefix="thumbnails",
         local_dirs=[
             "backend/storage/thumbnails",
+            "backend/storage/minigames/images",
             "apps/student-desktop/frontend/public/thumbnails",
         ],
         valid_extensions=[".png", ".jpg", ".jpeg", ".webp"]
@@ -181,6 +182,7 @@ def main():
         folder_prefix="videos",
         local_dirs=[
             "backend/storage/videos",
+            "backend/storage/minigames/videos",
             "apps/student-desktop/frontend/public/videos",
         ],
         valid_extensions=[".mp4"]

@@ -3,6 +3,7 @@ import { Pencil, Trash2, X, Loader2, ImagePlus } from "lucide-react";
 import Button from "@/components/Button";
 import Input from "@/components/Input";
 import { updateSign, deleteSign, uploadSignPhoto } from "@/services/curriculum";
+import { resolveMediaUrl } from "@/services/mini-games";
 
 interface StageSignItem {
   id: string;
@@ -179,11 +180,18 @@ export default function EditSignDialog({ sign, onUpdated }: EditSignDialogProps)
                   ) : sign.photo_url ? (
                     <div className="flex flex-col items-center gap-1.5">
                       <img
-                        src={`http://localhost:8000${sign.photo_url}`}
+                        src={resolveMediaUrl(sign.photo_url)}
                         alt={sign.sign_name}
                         className="h-20 max-w-full object-contain rounded-lg border border-gray-200 bg-white p-1 shadow-xs"
                         onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = 'none';
+                          const target = e.target as HTMLImageElement;
+                          if (!target.dataset.triedFallback && sign.photo_url) {
+                            target.dataset.triedFallback = "true";
+                            const filename = sign.photo_url.split("?")[0].split("/").pop();
+                            target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/thumbnails/${filename}`;
+                          } else {
+                            target.style.display = 'none';
+                          }
                         }}
                       />
                       <p className="text-xs font-medium text-gray-700">Click to replace visual aid picture</p>

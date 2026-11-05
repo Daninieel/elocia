@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import Button from "@/components/Button";
 import { fetchStageById, uploadSignPhoto } from "@/services/curriculum";
+import { resolveMediaUrl } from "@/services/mini-games";
 
 export interface ThumbnailSignItem {
   id: string | number;
@@ -283,7 +284,7 @@ export default function EditStageThumbnailsDialog({
               const currentPhotoSrc = stagedFile
                 ? URL.createObjectURL(stagedFile)
                 : sign.photo_url
-                ? `http://localhost:8000${sign.photo_url}`
+                ? resolveMediaUrl(sign.photo_url)
                 : null;
 
               return (
@@ -313,7 +314,14 @@ export default function EditStageThumbnailsDialog({
                           alt={sign.sign_name}
                           className="h-full w-full object-contain p-1"
                           onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
+                            const target = e.target as HTMLImageElement;
+                            if (!target.dataset.triedFallback && sign.photo_url) {
+                              target.dataset.triedFallback = "true";
+                              const filename = sign.photo_url.split("?")[0].split("/").pop();
+                              target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/thumbnails/${filename}`;
+                            } else {
+                              target.style.display = "none";
+                            }
                           }}
                         />
                       ) : (

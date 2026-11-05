@@ -215,6 +215,15 @@ export default function TeacherViewMiniGamePage() {
                   src={resolveMediaUrl(activeVideoUrl)}
                   controls
                   className="w-full h-full object-contain"
+                  onError={(e) => {
+                    const target = e.target as HTMLVideoElement;
+                    if (!target.dataset.triedFallback && activeVideoUrl) {
+                      target.dataset.triedFallback = "true";
+                      const filename = activeVideoUrl.split("?")[0].split("/").pop();
+                      target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/videos/${filename}`;
+                      target.load();
+                    }
+                  }}
                 />
               ) : (
                 <div className="flex flex-col items-center justify-center gap-3 text-gray-400 p-8 text-center">
@@ -355,6 +364,16 @@ export default function TeacherViewMiniGamePage() {
                           src={resolveMediaUrl(item.objective_image_url)}
                           alt={item.objective_answer}
                           className="h-full w-full object-contain p-2"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            if (!target.dataset.triedFallback && item.objective_image_url) {
+                              target.dataset.triedFallback = "true";
+                              const filename = item.objective_image_url.split("?")[0].split("/").pop();
+                              target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/thumbnails/${filename}`;
+                            } else {
+                              target.style.display = "none";
+                            }
+                          }}
                         />
                       ) : (
                         <div className="flex flex-col items-center gap-1 text-gray-400 text-xs">
@@ -448,6 +467,16 @@ export default function TeacherViewMiniGamePage() {
                           src={resolveMediaUrl(item.word_form_image_url)}
                           alt={item.word_form}
                           className="h-full w-full object-contain p-2"
+                          onError={(e) => {
+                            const target = e.target as HTMLImageElement;
+                            if (!target.dataset.triedFallback && item.word_form_image_url) {
+                              target.dataset.triedFallback = "true";
+                              const filename = item.word_form_image_url.split("?")[0].split("/").pop();
+                              target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/thumbnails/${filename}`;
+                            } else {
+                              target.style.display = "none";
+                            }
+                          }}
                         />
                       ) : (
                         <div className="flex flex-col items-center gap-1 text-gray-400 text-xs">

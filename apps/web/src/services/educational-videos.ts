@@ -1,6 +1,7 @@
 import type { EducationalVideo } from "@/interfaces/educational-video.interface";
 
 import { API_BASE_URL } from "@/config/api";
+import { resolveMediaUrl } from "@/services/mini-games";
 
 export type CreateEducationalVideoPayload = {
   title: string;
@@ -53,10 +54,8 @@ export async function fetchEducationalVideos(): Promise<EducationalVideo[]> {
     subject: v.subject,
     gradeLevel: v.grade_level,
     durationMinutes: v.duration_minutes,
-    videoUrl: v.video_url?.startsWith("http") ? v.video_url : `${API_BASE_URL}${v.video_url}`,
-    thumbnailUrl: v.thumbnail_url
-      ? (v.thumbnail_url.startsWith("http") ? v.thumbnail_url : `${API_BASE_URL}${v.thumbnail_url}`)
-      : undefined,
+    videoUrl: resolveMediaUrl(v.video_url),
+    thumbnailUrl: v.thumbnail_url ? resolveMediaUrl(v.thumbnail_url) : undefined,
     createdBy: v.created_by,
     createdAt: new Date(v.created_at || Date.now()),
   }));

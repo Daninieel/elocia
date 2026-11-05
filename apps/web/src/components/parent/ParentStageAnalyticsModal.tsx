@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { X, Sparkles, TrendingUp, Layers } from "lucide-react";
+import { API_BASE_URL } from "@/config/api";
 
 interface ParentStageAnalyticsModalProps {
   studentId: string;
@@ -86,7 +87,7 @@ export default function ParentStageAnalyticsModal({
     setSelectedRound(null);
 
     const attemptQuery = activeAttemptNum ? `&attempt_index=${activeAttemptNum}` : "";
-    fetch(`http://localhost:8000/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`)
+    fetch(`${API_BASE_URL}/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load analytics");
         return res.json();

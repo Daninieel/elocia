@@ -19,7 +19,7 @@ import Separator from "../../../components/Separator";
 import Input from "../../../components/Input";
 import Dropdown from "../../../components/Dropdown";
 import { useState, type FormEvent } from "react";
-import { createMagicFingersActivity, uploadMiniGameMedia } from "@/services/mini-games";
+import { createMagicFingersActivity, uploadMiniGameMedia, resolveMediaUrl } from "@/services/mini-games";
 import type { MagicFingersItem } from "@/interfaces/mini-game.interface";
 
 const steps = [
@@ -38,7 +38,6 @@ const steps = [
 ];
 
 const DRAFT_KEY = "teacher-magic-fingers-draft";
-const API_BASE_URL = "http://localhost:8000";
 
 type MagicFingersPayload = {
   game_type: "magic_fingers";
@@ -198,7 +197,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
     setUploadError("");
     try {
       const res = await uploadMiniGameMedia(file, (percent) => setUploadProgress(percent));
-      updateItem(index, { [field]: `${API_BASE_URL}${res.url}` });
+      updateItem(index, { [field]: res.url });
     } catch (err) {
       setUploadError(
         err instanceof Error ? err.message : "Failed to upload media",
@@ -283,7 +282,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
         let uploadedUrl = "";
         try {
           const res = await uploadMiniGameMedia(file);
-          uploadedUrl = `${API_BASE_URL}${res.url}`;
+          uploadedUrl = res.url;
         } catch (uploadErr) {
           console.error("Batch upload failed for file:", file.name, uploadErr);
         }
@@ -590,7 +589,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
                   <label className="flex flex-col min-h-40 cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-4 text-center hover:border-(--primary) hover:bg-(--primary-light)">
                     {item.objective_image_url ? (
                       <img
-                        src={item.objective_image_url}
+                        src={resolveMediaUrl(item.objective_image_url)}
                         alt="Objective prompt"
                         className="max-h-32 max-w-full rounded-xl object-contain"
                       />
@@ -635,7 +634,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
                           {item.reference_video_url ? (
                             <div className="space-y-2 w-full">
                               <video
-                                src={item.reference_video_url}
+                                src={resolveMediaUrl(item.reference_video_url)}
                                 controls
                                 className="max-h-40 w-full rounded-xl"
                               />
@@ -692,7 +691,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
                           {item.reference_video_url_2 ? (
                             <div className="space-y-2 w-full">
                               <video
-                                src={item.reference_video_url_2}
+                                src={resolveMediaUrl(item.reference_video_url_2)}
                                 controls
                                 className="max-h-40 w-full rounded-xl"
                               />
@@ -736,7 +735,7 @@ export function MagicFingersCreateActivityStepTwoPage() {
                       {item.reference_video_url ? (
                         <div className="space-y-2 w-full">
                           <video
-                            src={item.reference_video_url}
+                            src={resolveMediaUrl(item.reference_video_url)}
                             controls
                             className="max-h-48 w-full rounded-xl"
                           />
@@ -935,7 +934,7 @@ export function MagicFingersCreateActivityStepThreePage() {
                     </div>
                     {item.objective_image_url && (
                       <img
-                        src={item.objective_image_url}
+                        src={resolveMediaUrl(item.objective_image_url)}
                         alt="Prompt"
                         className="size-24 rounded-xl object-contain bg-white p-1 border"
                       />
@@ -954,7 +953,7 @@ export function MagicFingersCreateActivityStepThreePage() {
                           </span>
                           {item.reference_video_url ? (
                             <video
-                              src={item.reference_video_url}
+                              src={resolveMediaUrl(item.reference_video_url)}
                               controls
                               className="max-h-40 w-full rounded-xl bg-black"
                             />
@@ -970,7 +969,7 @@ export function MagicFingersCreateActivityStepThreePage() {
                           </span>
                           {item.reference_video_url_2 ? (
                             <video
-                              src={item.reference_video_url_2}
+                              src={resolveMediaUrl(item.reference_video_url_2)}
                               controls
                               className="max-h-40 w-full rounded-xl bg-black"
                             />
@@ -983,7 +982,7 @@ export function MagicFingersCreateActivityStepThreePage() {
                       </div>
                     ) : item.reference_video_url ? (
                       <video
-                        src={item.reference_video_url}
+                        src={resolveMediaUrl(item.reference_video_url)}
                         controls
                         className="max-h-52 w-full rounded-xl bg-black"
                       />

@@ -66,20 +66,27 @@ export const API_BASE = {
  */
 export function resolveMediaUrl(url: string | null | undefined): string | null {
   if (!url) return null;
-  const trimmed = url.trim();
+  let trimmed = url.trim();
   if (!trimmed) return null;
 
-  // Replace localhost or 127.0.0.1 origins with current API_BASE
-  if (trimmed.startsWith('http://localhost:8000') || trimmed.startsWith('http://127.0.0.1:8000')) {
-    return trimmed.replace(/^http:\/\/(localhost|127\.0\.0\.1):8000/, API_BASE);
+  // 1. Strip accidental localhost / 127.0.0.1 origins
+  if (trimmed.includes('localhost:8000') || trimmed.includes('127.0.0.1:8000')) {
+    trimmed = trimmed.replace(/^https?:\/\/(localhost|127\.0\.0\.1):8000/, '');
   }
 
-  // Already a full external URL
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+  // 2. Direct external HTTPS / Supabase / blob URLs
+  if (trimmed.startsWith('blob:') || trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('https://') && !trimmed.includes('localhost')) {
     return trimmed;
   }
 
-  // Direct Supabase CDN resolution for static folders
+  if (!trimmed.startsWith('/')) {
+    trimmed = '/' + trimmed;
+  }
+
+  // 3. Direct Supabase CDN resolution for static folders
   if (trimmed.startsWith('/thumbnails/')) {
     return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
   }
@@ -87,19 +94,15 @@ export function resolveMediaUrl(url: string | null | undefined): string | null {
     return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
   }
   if (trimmed.startsWith('/minigames/images/')) {
-    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+    const filename = trimmed.split('?')[0].split('/').pop();
+    return `${SUPABASE_CDN_FALLBACK}/thumbnails/${filename}`;
   }
   if (trimmed.startsWith('/minigames/videos/')) {
-    return `${SUPABASE_CDN_FALLBACK}${trimmed}`;
+    const filename = trimmed.split('?')[0].split('/').pop();
+    return `${SUPABASE_CDN_FALLBACK}/videos/${filename}`;
   }
 
-  // Relative path starting with slash (e.g. /minigames/images/...)
-  if (trimmed.startsWith('/')) {
-    return `${API_BASE}${trimmed}`;
-  }
-
-  // Relative path without leading slash
-  return `${API_BASE}/${trimmed}`;
+  return `${API_BASE}${trimmed}`;
 }
 
 export interface SeeItSignItItemDetail {

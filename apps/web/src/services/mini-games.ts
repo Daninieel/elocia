@@ -212,18 +212,53 @@ export type UpdateMiniGamePayload = {
   magic_fingers_items?: MagicFingersItem[];
 };
 
+const SUPABASE_CDN = "https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media";
+
 /**
- * Resolve media URL to ensure proper absolute path with backend origin.
+ * Resolve media URL with smart dual-mode:
+ * - On Localhost: loads from local backend (fast offline demo, zero latency)
+ * - On Live Web (Vercel): routes directly to Supabase CDN (avoids mixed-content errors and ephemeral storage issues)
+ * - Also sanitizes legacy database entries containing 'http://localhost:8000'
  */
 export function resolveMediaUrl(url?: string): string {
   if (!url) return "";
-  if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:") || url.startsWith("blob:")) {
-    return url;
+  let clean = url.trim();
+
+  // 1. Strip accidental localhost:8000 / 127.0.0.1:8000 saved in database
+  if (clean.includes("localhost:8000") || clean.includes("127.0.0.1:8000")) {
+    clean = clean.replace(/^https?:\/\/(localhost|127\.0\.0\.1):8000/, "");
   }
-  if (url.startsWith("/")) {
-    return `${API_BASE_URL}${url}`;
+
+  // 2. Direct external HTTPS, blob, or base64 data URLs
+  if (clean.startsWith("blob:") || clean.startsWith("data:")) return clean;
+  if (clean.startsWith("https://") && !clean.includes("localhost")) return clean;
+
+  // 3. Normalize leading slash
+  if (!clean.startsWith("/")) clean = "/" + clean;
+
+  // 4. ENVIRONMENT DETECTION:
+  const isLocalhost =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1" ||
+      window.location.hostname === "[::1]");
+
+  if (isLocalhost) {
+    // 🌟 LOCALHOST SHOWCASE MODE: Load directly from local backend
+    return `${API_BASE_URL}${clean}`;
+  } else {
+    // 🌐 LIVE WEB SHOWCASE MODE (Vercel / Cloud):
+    // Map static assets directly to Supabase CDN
+    if (clean.startsWith("/videos/") || clean.startsWith("/minigames/videos/")) {
+      const filename = clean.split("?")[0].split("/").pop();
+      return `${SUPABASE_CDN}/videos/${filename}`;
+    }
+    if (clean.startsWith("/thumbnails/") || clean.startsWith("/minigames/images/")) {
+      const filename = clean.split("?")[0].split("/").pop();
+      return `${SUPABASE_CDN}/thumbnails/${filename}`;
+    }
+    return `${SUPABASE_CDN}${clean}`;
   }
-  return `${API_BASE_URL}/${url}`;
 }
 
 /**

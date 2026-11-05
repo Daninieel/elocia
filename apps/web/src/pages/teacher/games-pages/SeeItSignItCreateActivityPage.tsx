@@ -19,7 +19,7 @@ import Separator from "../../../components/Separator";
 import Input from "../../../components/Input";
 import Dropdown from "../../../components/Dropdown";
 import { useState, type FormEvent } from "react";
-import { createMiniGame, uploadMiniGameMedia } from "@/services/mini-games";
+import { createMiniGame, uploadMiniGameMedia, resolveMediaUrl } from "@/services/mini-games";
 
 const steps = [
   {
@@ -37,7 +37,6 @@ const steps = [
 ];
 
 const DRAFT_KEY = "teacher-see-it-sign-it-draft";
-const API_BASE_URL = "http://localhost:8000";
 
 type SeeItSignItGameItem = {
   objective_image_url: string;
@@ -185,7 +184,7 @@ export function SeeItSignItCreateActivityStepTwoPage() {
       const res = await uploadMiniGameMedia(file, (percent) => {
         setUploadProgress(percent);
       });
-      updateItem(index, { [field]: `${API_BASE_URL}${res.url}` });
+      updateItem(index, { [field]: res.url });
     } catch (err) {
       setUploadError(
         err instanceof Error ? err.message : "Failed to upload media",
@@ -273,7 +272,7 @@ export function SeeItSignItCreateActivityStepTwoPage() {
           const res = await uploadMiniGameMedia(file, (percent) => {
             setBatchProgress(`Uploading video ${i + 1} of ${files.length} (${percent}%)...`);
           });
-          uploadedUrl = `${API_BASE_URL}${res.url}`;
+          uploadedUrl = res.url;
         } catch (uploadErr) {
           console.error("Batch upload failed for file:", file.name, uploadErr);
         }
@@ -410,7 +409,7 @@ export function SeeItSignItCreateActivityStepTwoPage() {
                 <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light)">
                   {item.objective_image_url ? (
                     <img
-                      src={item.objective_image_url}
+                      src={resolveMediaUrl(item.objective_image_url)}
                       alt="Uploaded objective"
                       className="max-h-40 max-w-full rounded-xl object-contain"
                     />
@@ -467,7 +466,7 @@ export function SeeItSignItCreateActivityStepTwoPage() {
                 <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light)">
                   {item.reference_video_url ? (
                     <video
-                      src={item.reference_video_url}
+                      src={resolveMediaUrl(item.reference_video_url)}
                       controls
                       className="max-h-40 max-w-full rounded-xl"
                     />
@@ -663,7 +662,7 @@ export function SeeItSignItCreateActivityStepThreePage() {
                   </div>
                   {item.objective_image_url ? (
                     <img
-                      src={item.objective_image_url}
+                      src={resolveMediaUrl(item.objective_image_url)}
                       alt={`Round ${index + 1} objective`}
                       className="max-h-52 w-full rounded-xl object-contain"
                     />
@@ -681,7 +680,7 @@ export function SeeItSignItCreateActivityStepThreePage() {
                   </p>
                   {item.reference_video_url ? (
                     <video
-                      src={item.reference_video_url}
+                      src={resolveMediaUrl(item.reference_video_url)}
                       controls
                       className="max-h-64 w-full rounded-xl bg-black"
                     />

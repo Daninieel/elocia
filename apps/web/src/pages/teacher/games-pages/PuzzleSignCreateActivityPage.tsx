@@ -20,7 +20,7 @@ import Separator from "../../../components/Separator";
 import Input from "../../../components/Input";
 import Dropdown from "../../../components/Dropdown";
 import { useState, type FormEvent } from "react";
-import { createPuzzleSignActivity, uploadMiniGameMedia } from "@/services/mini-games";
+import { createPuzzleSignActivity, uploadMiniGameMedia, resolveMediaUrl } from "@/services/mini-games";
 import type { PuzzleSignItem } from "@/interfaces/mini-game.interface";
 
 const steps = [
@@ -39,7 +39,6 @@ const steps = [
 ];
 
 const DRAFT_KEY = "teacher-puzzle-sign-draft";
-const API_BASE_URL = "http://localhost:8000";
 
 type PuzzleSignPayload = {
   game_type: "puzzle_sign";
@@ -257,7 +256,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
     setUploadError("");
     try {
       const res = await uploadMiniGameMedia(file, (percent) => setUploadProgress(percent));
-      updateItem(index, { [field]: `${API_BASE_URL}${res.url}` });
+      updateItem(index, { [field]: res.url });
     } catch (err) {
       setUploadError(
         err instanceof Error ? err.message : "Failed to upload media",
@@ -288,13 +287,13 @@ export function PuzzleSignCreateActivityStepTwoPage() {
 
         if (["mp4", "webm", "mov", "mkv"].includes(ext)) {
           const res = await uploadMiniGameMedia(file);
-          updates.reference_video_url = `${API_BASE_URL}${res.url}`;
+          updates.reference_video_url = res.url;
           if (!currentItem.hidden_word) {
             updates.hidden_word = capitalized;
           }
         } else if (["png", "jpg", "jpeg", "webp", "svg"].includes(ext)) {
           const res = await uploadMiniGameMedia(file);
-          const imgUrl = `${API_BASE_URL}${res.url}`;
+          const imgUrl = res.url;
           // First image goes to known item, second goes to result form
           if (isSlot1) {
             if (!updates.word_two_image_url && !currentItem.word_two_image_url) {
@@ -345,7 +344,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
         try {
           const file = new File([blob], `pasted_img_${Date.now()}.png`, { type: blob.type });
           const res = await uploadMiniGameMedia(file);
-          const imgUrl = `${API_BASE_URL}${res.url}`;
+          const imgUrl = res.url;
 
           const isSlot1 = (game.items[index]?.missing_position || 2) === 1;
           if (targetSlot === "known") {
@@ -612,7 +611,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
                     <label className="flex flex-col min-h-40 cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-4 text-center hover:border-(--primary) hover:bg-(--primary-light)">
                       {(item.word_two_image_url || item.word_one_image_url) ? (
                         <img
-                          src={item.word_two_image_url || item.word_one_image_url}
+                          src={resolveMediaUrl(item.word_two_image_url || item.word_one_image_url)}
                           alt="Word 2"
                           className="max-h-28 max-w-full rounded-xl object-contain"
                         />
@@ -663,7 +662,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
                     <label className="flex flex-col min-h-40 cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-4 text-center hover:border-(--primary) hover:bg-(--primary-light)">
                       {item.word_one_image_url ? (
                         <img
-                          src={item.word_one_image_url}
+                          src={resolveMediaUrl(item.word_one_image_url)}
                           alt="Word 1"
                           className="max-h-28 max-w-full rounded-xl object-contain"
                         />
@@ -729,7 +728,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
                 <label className="flex flex-col min-h-40 cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-4 text-center hover:border-(--primary) hover:bg-(--primary-light)">
                   {item.word_form_image_url ? (
                     <img
-                      src={item.word_form_image_url}
+                      src={resolveMediaUrl(item.word_form_image_url)}
                       alt="Result"
                       className="max-h-28 max-w-full rounded-xl object-contain"
                     />
@@ -756,7 +755,7 @@ export function PuzzleSignCreateActivityStepTwoPage() {
               {item.reference_video_url ? (
                 <div className="space-y-2">
                   <video
-                    src={item.reference_video_url}
+                    src={resolveMediaUrl(item.reference_video_url)}
                     controls
                     className="max-h-40 max-w-full rounded-xl"
                   />
@@ -952,14 +951,14 @@ export function PuzzleSignCreateActivityStepThreePage() {
                   <div className="flex gap-3">
                     {((item.missing_position || 2) === 1 ? (item.word_two_image_url || item.word_one_image_url) : item.word_one_image_url) && (
                       <img
-                        src={(item.missing_position || 2) === 1 ? (item.word_two_image_url || item.word_one_image_url) : item.word_one_image_url}
+                        src={resolveMediaUrl((item.missing_position || 2) === 1 ? (item.word_two_image_url || item.word_one_image_url) : item.word_one_image_url)}
                         alt="Known Item"
                         className="size-20 rounded-xl object-contain bg-white p-1 border"
                       />
                     )}
                     {item.word_form_image_url && (
                       <img
-                        src={item.word_form_image_url}
+                        src={resolveMediaUrl(item.word_form_image_url)}
                         alt="Result"
                         className="size-20 rounded-xl object-contain bg-white p-1 border"
                       />
@@ -973,7 +972,7 @@ export function PuzzleSignCreateActivityStepThreePage() {
                   </p>
                   {item.reference_video_url ? (
                     <video
-                      src={item.reference_video_url}
+                      src={resolveMediaUrl(item.reference_video_url)}
                       controls
                       className="max-h-52 w-full rounded-xl bg-black"
                     />

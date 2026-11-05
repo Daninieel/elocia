@@ -8,6 +8,7 @@ import EditStageThumbnailsDialog from "@/components/teacher/EditStageThumbnailsD
 import EditSignDialog from "@/components/teacher/EditSignDialog";
 import AddSignDialog from "@/components/teacher/AddSignDialog";
 import { fetchStageById } from "@/services/curriculum";
+import { resolveMediaUrl } from "@/services/mini-games";
 import { ChevronLeft, Play, Video, FileText, CheckCircle2, Image as ImageIcon } from "lucide-react";
 
 interface StageSign {
@@ -196,11 +197,20 @@ export default function TeacherStageItemPage() {
                       {activeVideo ? (
                         <video
                           key={activeVideo}
-                          src={`http://localhost:8000${activeVideo}`}
+                          src={resolveMediaUrl(activeVideo)}
                           controls
                           autoPlay
                           playsInline
                           className="h-full w-full object-contain"
+                          onError={(e) => {
+                            const target = e.target as HTMLVideoElement;
+                            if (!target.dataset.triedFallback && activeVideo) {
+                              target.dataset.triedFallback = "true";
+                              const filename = activeVideo.split("?")[0].split("/").pop();
+                              target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/videos/${filename}`;
+                              target.load();
+                            }
+                          }}
                         />
                       ) : (
                         <div className="text-gray-400 flex flex-col items-center gap-2">
@@ -248,11 +258,18 @@ export default function TeacherStageItemPage() {
                               >
                                 {sign.photo_url ? (
                                   <img
-                                    src={`http://localhost:8000${sign.photo_url}`}
+                                    src={resolveMediaUrl(sign.photo_url)}
                                     alt={sign.sign_name}
                                     className="h-full w-full object-contain"
                                     onError={(e) => {
-                                      (e.target as HTMLImageElement).style.display = 'none';
+                                      const target = e.target as HTMLImageElement;
+                                      if (!target.dataset.triedFallback && sign.photo_url) {
+                                        target.dataset.triedFallback = "true";
+                                        const filename = sign.photo_url.split("?")[0].split("/").pop();
+                                        target.src = `https://ovffqxjrokyuvlkmccup.supabase.co/storage/v1/object/public/elocia-media/thumbnails/${filename}`;
+                                      } else {
+                                        target.style.display = 'none';
+                                      }
                                     }}
                                   />
                                 ) : (
