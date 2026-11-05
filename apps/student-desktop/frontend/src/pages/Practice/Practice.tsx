@@ -49,13 +49,69 @@ export default function Practice({ onNavigate, onStartLesson, cachedCurriculum }
   const [practiceItems, setPracticeItems] = useState<PracticeItem[]>(() => {
     try {
       const stored = localStorage.getItem('elocia_cached_needs_practice');
-      return stored ? JSON.parse(stored) : [];
+      if (!stored) return [];
+      const parsed: PracticeItem[] = JSON.parse(stored);
+      return parsed.map((it) => {
+        const cleanStage = it.stage_id === 43 ? 2 : it.stage_id;
+        let label = it.section_label;
+        const sLower = String(it.sign).toLowerCase();
+        const isColor = ['green', 'grey', 'red', 'blue', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white'].includes(sLower);
+        if (!label || label.includes('Stage 43') || (isColor && label.startsWith('Section 1'))) {
+          if (isColor) {
+            label = `Section 3, Stage ${cleanStage}`;
+          } else {
+            label = `Stage ${cleanStage}`;
+          }
+        } else {
+          label = label.replace('Stage 43', 'Stage 2');
+        }
+        return { ...it, stage_id: cleanStage, section_label: label };
+      });
     } catch {
       return [];
     }
   });
 
   const [reviewPages, setReviewPages] = useState<Record<string, number>>({});
+  const [isRefreshingDrills, setIsRefreshingDrills] = useState(false);
+
+  const loadNeedsPractice = async () => {
+    try {
+      const rawStudent = localStorage.getItem('elocia_current_student');
+      let studentId: string | undefined;
+      if (rawStudent) {
+        try {
+          const parsed = JSON.parse(rawStudent);
+          if (parsed?.id) studentId = parsed.id;
+          else if (parsed?.student_id) studentId = parsed.student_id;
+        } catch {}
+      }
+      const items = await fetchNeedsPractice(studentId || 'all');
+      if (Array.isArray(items)) {
+        const cleaned = items.map((it) => {
+          const cleanStage = it.stage_id === 43 ? 2 : it.stage_id;
+          let label = it.section_label;
+          if (!label || label.includes('Stage 43') || label === 'Section 1, Stage 43') {
+            const sLower = String(it.sign).toLowerCase();
+            if (['green', 'grey', 'red', 'blue', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white'].includes(sLower)) {
+              label = `Section 3, Stage ${cleanStage}`;
+            } else {
+              label = `Stage ${cleanStage}`;
+            }
+          } else {
+            label = label.replace('Stage 43', 'Stage 2');
+          }
+          return { ...it, stage_id: cleanStage, section_label: label };
+        });
+        setPracticeItems(cleaned);
+        try {
+          localStorage.setItem('elocia_cached_needs_practice', JSON.stringify(cleaned));
+        } catch {}
+      }
+    } catch (e) {
+      console.warn('Failed to load focus drills:', e);
+    }
+  };
 
   const getEmbedUrl = (url: string) => {
     if (!url) return '';
@@ -99,7 +155,7 @@ export default function Practice({ onNavigate, onStartLesson, cachedCurriculum }
       }
     });
 
-    // 4. Load student progress & needs practice in background
+    // 4. Load student progress in background
     if (studentId) {
       fetchStudentProgress(studentId).then((prog) => {
         if (prog) {
@@ -107,26 +163,19 @@ export default function Practice({ onNavigate, onStartLesson, cachedCurriculum }
           try {
             localStorage.setItem('elocia_cached_progress', JSON.stringify(prog));
           } catch {}
-
-          // Also re-filter practice items once prog is loaded so no future signs are leaked
-          fetchNeedsPractice(studentId).then((items) => {
-            try {
-              const finishedSigns: string[] = JSON.parse(localStorage.getItem('elocia_finished_drills') || '[]');
-              const completedStageIds = (prog.stages || []).filter(s => s.passed).map(s => s.stage_id);
-              // Only show practice signs for stages the student has completed (anti-spoiler)
-              const filtered = (items || []).filter(it => 
-                !finishedSigns.includes(it.sign) && 
-                (completedStageIds.includes(it.stage_id) || it.stage_id === 1)
-              );
-              setPracticeItems(filtered);
-              localStorage.setItem('elocia_cached_needs_practice', JSON.stringify(filtered));
-            } catch {
-              setPracticeItems(items || []);
-            }
-          });
         }
       });
     }
+
+    // 5. Initial fetch of focus drills & auto-poll every 3 seconds for instant sync with Teacher Portal
+    loadNeedsPractice();
+    const pollInterval = setInterval(loadNeedsPractice, 3000);
+    window.addEventListener('focus', loadNeedsPractice);
+
+    return () => {
+      clearInterval(pollInterval);
+      window.removeEventListener('focus', loadNeedsPractice);
+    };
   }, []);
 
   return (
@@ -151,14 +200,42 @@ export default function Practice({ onNavigate, onStartLesson, cachedCurriculum }
                 <h2>Keep Practicing</h2>
                 <p>Signs to help you build your skills</p>
               </div>
-              <button 
-                className="view-all-pill-btn"
-                onClick={() => setShowAllPractice(true)}
-                title="View all practice signs"
-              >
-                <span>View all</span>
-                <span>→</span>
-              </button>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsRefreshingDrills(true);
+                    await loadNeedsPractice();
+                    setTimeout(() => setIsRefreshingDrills(false), 500);
+                  }}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    padding: '6px 14px',
+                    borderRadius: '9999px',
+                    border: '1.5px solid #cbd5e1',
+                    background: '#ffffff',
+                    color: '#475569',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease'
+                  }}
+                  title="Check for newly assigned teacher focus drills"
+                >
+                  <span style={{ display: 'inline-block', transform: isRefreshingDrills ? 'rotate(180deg)' : 'none', transition: 'transform 0.5s' }}>🔄</span>
+                  <span>{isRefreshingDrills ? 'Checking...' : 'Refresh'}</span>
+                </button>
+                <button 
+                  className="view-all-pill-btn"
+                  onClick={() => setShowAllPractice(true)}
+                  title="View all practice signs"
+                >
+                  <span>View all</span>
+                  <span>→</span>
+                </button>
+              </div>
             </div>
 
             <div className="kp-cards-row">

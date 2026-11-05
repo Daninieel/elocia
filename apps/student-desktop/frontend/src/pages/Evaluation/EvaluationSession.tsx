@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './EvaluationSession.css';
 import { getStageData, getStageNumber } from '../../data/curriculum';
-import { saveScore, removeFocusDrillSign, resolveMediaUrl } from '../../utils/api';
+import { saveScore, removeFocusDrillSign, completeFocusDrill, resolveMediaUrl } from '../../utils/api';
 import { startEvaluationTour, stopCurrentTour } from '../../utils/activityTours';
 import { requestCameraStream, stopMediaStream } from '../../utils/cameraManager';
 
@@ -86,17 +86,35 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
   const stageData = getStageData(currentStageId, dynamicCurriculum);
   const rawItems = stageData?.items || [];
 
+  const KNOWN_SIGN_IDS: Record<string, number> = {
+    "1": 101, "2": 102, "3": 103, "4": 104, "5": 105,
+    "6": 106, "7": 107, "8": 108, "9": 109, "10": 110,
+    "11": 121, "12": 122, "13": 123, "14": 124, "15": 125,
+    "16": 126, "17": 127, "18": 128, "19": 129, "20": 130,
+    "a": 170, "b": 171, "c": 113, "d": 114, "e": 115,
+    "f": 116, "g": 117, "h": 118, "i": 119, "j": 120,
+    "brown": 140, "green": 175, "grey": 176, "gray": 176,
+    "orange": 143, "pink": 144, "purple": 145, "red": 146,
+    "violet": 147, "white": 148, "yellow": 149, "black": 172, "blue": 173,
+    "apple": 150, "avocado": 151, "banana": 152, "cherry": 153, "coconut": 154,
+    "grapes": 155, "lemon": 156, "mango": 157, "melon": 158, "papaya": 160,
+    "pineapple": 161, "strawberry": 162, "watermelon": 163,
+    "bear": 131, "cat": 133,
+    "circle": 178, "diamond": 179, "heart": 180, "oval": 181, "rectangle": 182, "square": 183,
+  };
+
   // Helper to map known standard baseline signs if not in currently loaded stage
   const getFallbackGlobalId = (name: string): number => {
-    const n = name.trim().toUpperCase();
-    const num = parseInt(n, 10);
+    const clean = name.trim().toLowerCase();
+    if (KNOWN_SIGN_IDS[clean]) return KNOWN_SIGN_IDS[clean];
+    const num = parseInt(clean, 10);
     if (!isNaN(num)) {
       if (num >= 1 && num <= 10) return 100 + num; // 1->101, 5->105
       if (num >= 11 && num <= 20) return 110 + num; // 11->121, 16->126
       return num;
     }
-    if (n.length === 1 && n >= 'A' && n <= 'J') {
-      return 111 + (n.charCodeAt(0) - 65); // A->111, B->112, etc.
+    if (clean.length === 1 && clean >= 'a' && clean <= 'j') {
+      return 111 + (clean.charCodeAt(0) - 97); // a->111, b->112, etc.
     }
     return 101;
   };
@@ -137,9 +155,12 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
         resolved.push(match);
       } else if (!seen.has(reqSign)) {
         seen.add(reqSign);
+        const gId = getFallbackGlobalId(reqSign);
         resolved.push({
-          globalId: getFallbackGlobalId(reqSign),
-          name: reqSign
+          globalId: gId,
+          name: reqSign,
+          videoUrl: `/videos/${gId}.mp4`,
+          photoUrl: `/thumbnails/${gId}.png`
         });
       }
     }
@@ -404,7 +425,7 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
           // If in practice / focus drill mode and the sign is passed, remove it from active focus drill!
           if (isPassed && currentItemRef.current?.name) {
             const sid = student.id || 'all';
-            removeFocusDrillSign(sid, currentItemRef.current.name);
+            removeFocusDrillSign(sid, currentItemRef.current.name, currentStageId);
             try {
               const finishedSigns = JSON.parse(localStorage.getItem('elocia_finished_drills') || '[]');
               if (!finishedSigns.includes(currentItemRef.current.name)) {
@@ -869,6 +890,14 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
       if (cooldownTimerRef.current) clearInterval(cooldownTimerRef.current);
     } else {
       stopCameraTracks();
+      if (isPracticeModeRef.current || (focusDrillSigns && focusDrillSigns.length > 0)) {
+        try {
+          const student = JSON.parse(localStorage.getItem('elocia_current_student') || '{}');
+          completeFocusDrill(student.id || 'all', currentStageId, focusDrillSigns || []);
+        } catch {
+          completeFocusDrill('all', currentStageId, focusDrillSigns || []);
+        }
+      }
       onComplete(currentStageId);
     }
   };
@@ -1221,17 +1250,36 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
           </div>
 
           <div className="eval-mascot-feedback-card">
-            {currentTier === 3 ? (
+            {isPracticeMode || (focusDrillSigns && focusDrillSigns.length > 0) || currentTier === 3 ? (
               <div className="eval-tier3-panel">
-                <span className="eval-tier3-badge">Teacher Demo</span>
-                <div className="eval-teacher-video-box" style={{ overflow: 'hidden', position: 'relative', borderRadius: '12px', background: '#000000' }}>
-                  <span className="eval-watch-pill" style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 10 }}>Watch carefully!</span>
+                <span className="eval-tier3-badge" style={isPracticeMode ? { background: '#FF8A00', color: '#ffffff' } : undefined}>
+                  {isPracticeMode ? 'Teacher Demo (Focus Drill)' : 'Teacher Demo'}
+                </span>
+                <div className="eval-teacher-video-box" style={{ overflow: 'hidden', position: 'relative', borderRadius: '12px', background: '#000000', minHeight: '220px' }}>
+                  <span className="eval-watch-pill" style={{ position: 'absolute', top: '10px', left: '10px', zIndex: 10 }}>
+                    {isPracticeMode ? 'Follow teacher to practice!' : 'Watch carefully!'}
+                  </span>
                   <video
+                    key={`teacher-video-${currentItem.globalId}-${currentItem.name}`}
                     src={resolveMediaUrl(currentItem.videoUrl) || `/videos/${currentItem.globalId}.mp4`}
                     controls
                     autoPlay
                     loop
+                    muted
+                    playsInline
                     style={{ width: '100%', height: '100%', objectFit: 'contain', background: '#000000' }}
+                    onError={(e) => {
+                      const v = e.currentTarget;
+                      if (!v.dataset.triedId && currentItem.globalId) {
+                        v.dataset.triedId = 'true';
+                        v.src = `/videos/${currentItem.globalId}.mp4`;
+                        v.play().catch(() => {});
+                      } else if (!v.dataset.triedName && currentItem.name) {
+                        v.dataset.triedName = 'true';
+                        v.src = `/videos/${currentItem.name.toLowerCase()}.mp4`;
+                        v.play().catch(() => {});
+                      }
+                    }}
                   />
                 </div>
               </div>

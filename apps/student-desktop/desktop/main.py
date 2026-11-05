@@ -660,10 +660,10 @@ async def evaluate_endpoint(websocket: WebSocket):
 
 # Mount compiled React frontend onto FastAPI (served on port 8001)
 frontend_dist_dirs = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")),
     get_asset_path("frontend_dist"),
     get_asset_path("dist"),
     os.path.abspath(os.path.join(os.path.dirname(__file__), "frontend_dist")),
-    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")),
 ]
 
 active_frontend_dir = None

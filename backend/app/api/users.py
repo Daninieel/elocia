@@ -113,19 +113,76 @@ async def create_adult(data: AdultCreate, db: AsyncSession = Depends(get_db)):
     await db.refresh(user)
     return user
 
+def compute_student_stage_average(attempts: list) -> float:
+    """
+    Computes a future-proof, dynamic student average across all completed stage assignments (N).
+    Each stage's score is computed from its playthrough attempts.
+    The overall average dynamically divides by N (the count of distinct stages evaluated),
+    guaranteeing 100% mathematical consistency with the stage rows shown in dashboard tables.
+    """
+    if not attempts:
+        return 0.0
+    by_stage = {}
+    for a in attempts:
+        stg = a.stage_id_new or a.stage_id or 1
+        by_stage.setdefault(stg, []).append(a)
+
+    stage_scores = []
+    for stg_key, s_atts in by_stage.items():
+        s_sorted = sorted(s_atts, key=lambda x: str(x.created_at or ''))
+        runs = []
+        current_run = []
+        seen = set()
+        last_t = None
+        for a in s_sorted:
+            s_id = str(a.sign_id or 1)
+            t = a.created_at.timestamp() if hasattr(a.created_at, 'timestamp') and a.created_at else 0
+            is_new = False
+            if current_run:
+                diff = (t - last_t) if last_t else 0
+                if diff > 120 or (s_id in seen and str(current_run[-1].sign_id or 1) != s_id):
+                    is_new = True
+            if is_new:
+                runs.append(current_run)
+                current_run = [a]
+                seen = {s_id}
+            else:
+                current_run.append(a)
+                seen.add(s_id)
+            last_t = t
+        if current_run:
+            runs.append(current_run)
+
+        run_avgs = []
+        for r in runs:
+            s_map = {}
+            for a in r:
+                s_map.setdefault(a.sign_id or 1, []).append(a)
+            rec = []
+            for sid, sid_atts in s_map.items():
+                p = [x for x in sid_atts if x.passed and (x.tier_level or 1) < 4]
+                if p:
+                    rec.append(p[-1].score_overall or 0.0)
+                elif sid_atts:
+                    rec.append(sid_atts[-1].score_overall or 0.0)
+            if rec:
+                run_avgs.append(round(sum(rec) / len(rec)))
+        if run_avgs:
+            stage_avg = round(sum(run_avgs) / len(run_avgs))
+            stage_scores.append(stage_avg)
+
+    if not stage_scores:
+        return 0.0
+    return round(float(sum(stage_scores) / len(stage_scores)), 1)
+
 @router.get("/students", response_model=List[dict])
 async def get_students(
     status: Optional[str] = Query("active", description="'active', 'inactive', or 'all'"),
     db: AsyncSession = Depends(get_db)
 ):
     query = (
-        select(
-            User,
-            StudentProfile,
-            func.coalesce(func.round(cast(func.avg(EvaluationAttempt.score_overall), Numeric), 1), 0.0).label("avg_score")
-        )
+        select(User, StudentProfile)
         .join(StudentProfile, User.id == StudentProfile.student_id)
-        .outerjoin(EvaluationAttempt, User.id == EvaluationAttempt.student_id)
         .where(User.role == UserRole.student)
     )
     if status == "active":
@@ -133,22 +190,28 @@ async def get_students(
     elif status == "inactive":
         query = query.where(User.is_active == False)
 
-    query = query.group_by(User.id, StudentProfile.student_id).order_by(
+    query = query.order_by(
         StudentProfile.grade_level.asc(), StudentProfile.student_number.asc(), User.created_at.asc()
     )
     result = await db.execute(query)
     rows = result.all()
-    # Query student IDs that have active Tier 4 attempts in official evaluations.
-    # Low score (e.g. 60%) or failed attempts do NOT trigger the red dot unless the student actually reaches Tier 4!
-    tier4_res = await db.execute(
-        select(EvaluationAttempt.student_id)
-        .where(
-            EvaluationAttempt.activity_type == "evaluation",
-            EvaluationAttempt.tier_level == 4
-        )
-        .distinct()
+
+    # Pre-fetch evaluation attempts to compute authentic student averages:
+    eval_res = await db.execute(
+        select(EvaluationAttempt).order_by(EvaluationAttempt.created_at.asc())
     )
-    flagged_student_ids = {str(sid) for (sid,) in tier4_res.all()}
+    all_evals = eval_res.scalars().all()
+    student_eval_map: dict = {}
+    tier4_student_ids = set()
+    for a in all_evals:
+        student_eval_map.setdefault(a.student_id, []).append(a)
+        if a.tier_level == 4:
+            tier4_student_ids.add(str(a.student_id))
+
+    student_averages = {
+        sid: compute_student_stage_average(s_atts)
+        for sid, s_atts in student_eval_map.items()
+    }
 
     return [
         {
@@ -162,10 +225,10 @@ async def get_students(
             "student_code": sp.student_code or f"G{sp.grade_level or 1}-01",
             "level": sp.level,
             "streak": get_effective_streak(sp),
-            "avg_score": float(avg),
-            "has_tier4_flag": str(u.id) in flagged_student_ids
+            "avg_score": student_averages.get(u.id, 0.0),
+            "has_tier4_flag": str(u.id) in tier4_student_ids
         }
-        for u, sp, avg in rows
+        for u, sp in rows
     ]
 
 @router.get("/parents", response_model=List[dict])
@@ -427,22 +490,31 @@ async def get_user(user_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
 
     user, profile = row
 
-    # Consolidated query: compute live eval XP, avg score, and signs mastered in 1 query
-    eval_stats_res = await db.execute(
-        select(
-            func.coalesce(func.sum(EvaluationAttempt.xp_earned), 0).label("eval_xp"),
-            func.coalesce(
-                func.round(cast(func.avg(case((EvaluationAttempt.score_overall > 0, EvaluationAttempt.score_overall))), Numeric), 1),
-                0.0
-            ).label("avg_score"),
-            func.count(func.distinct(case((EvaluationAttempt.passed == True, EvaluationAttempt.sign_id)))).label("signs_mastered")
-        )
+    # Calculate authentic evaluation metrics:
+    # Deduplicates by sign to record the culminating passed attempt (or final Tier 4 attempt)
+    # consistent with curriculum guidelines and parent dashboard.
+    eval_atts_res = await db.execute(
+        select(EvaluationAttempt)
         .where(EvaluationAttempt.student_id == user_id)
+        .order_by(EvaluationAttempt.created_at.asc())
     )
-    eval_row = eval_stats_res.first()
-    total_eval_xp = eval_row.eval_xp if eval_row else 0
-    avg_score = float(eval_row.avg_score or 0.0) if eval_row else 0.0
-    signs_mastered = int(eval_row.signs_mastered or 0) if eval_row else 0
+    eval_atts = eval_atts_res.scalars().all()
+
+    total_eval_xp = sum(a.xp_earned or 0 for a in eval_atts)
+
+    signs_map = {}
+    for a in eval_atts:
+        stg = a.stage_id_new or a.stage_id or 1
+        key = f"{stg}_{a.sign_id or 1}"
+        signs_map.setdefault(key, []).append(a)
+
+    signs_mastered = 0
+    for key, atts in signs_map.items():
+        passed = [a for a in atts if a.passed and (a.tier_level or 1) < 4]
+        if passed:
+            signs_mastered += 1
+
+    avg_score = compute_student_stage_average(eval_atts)
 
     game_xp_res = await db.execute(
         select(func.coalesce(func.sum(MiniGameSession.score), 0))

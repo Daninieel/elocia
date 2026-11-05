@@ -1,11 +1,11 @@
-import { useEffect, useState, Fragment } from "react";
+import { useEffect, useState, useMemo, Fragment } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useGetStudentById } from "@/hooks/useStudents";
 
-import { fetchStudentScores } from "@/services/parent-progress";
+import { fetchStudentScores, fetchCurriculumStages, fetchStudentStageProgress } from "@/services/parent-progress";
 
-import { ArrowLeft, Flame, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, Flame, ChevronLeft, ChevronRight, ChevronDown, ChevronUp, Sparkles, Trophy } from "lucide-react";
 
 import { getStreakMessage } from "@/helpers/streak";
 
@@ -17,6 +17,9 @@ import StatCard from "@/components/StatCard";
 import LoadingState from "@/components/LoadingState";
 import ErrorState from "@/components/ErrorState";
 import UnitAnalyticsModal from "@/components/teacher/UnitAnalyticsModal";
+import { DetailedLearningPath } from "@/components/DetailedLearningPath";
+import { AchievementsModal } from "@/components/AchievementsModal";
+import { computeStudentAchievements } from "@/data/achievementsCatalog";
 
 export default function TeacherStudentProfilePage() {
   const { id } = useParams<{ id: string }>();
@@ -25,6 +28,10 @@ export default function TeacherStudentProfilePage() {
     [],
   );
   const [isAnalyticsOpen, setIsAnalyticsOpen] = useState<boolean>(false);
+  const [isAchievementsOpen, setIsAchievementsOpen] = useState<boolean>(false);
+  const [curriculumData, setCurriculumData] = useState<any>(null);
+  const [stageProgressData, setStageProgressData] = useState<any>(null);
+  const [activeSectionIndex, setActiveSectionIndex] = useState<number>(0);
   const [selectedStage, setSelectedStage] = useState<{
     stageId: number;
     title?: string;
@@ -153,7 +160,7 @@ export default function TeacherStudentProfilePage() {
           } else {
             signMap.get(sKey)!.attempts.push(att);
           }
-          if (att.tier_level === 4) {
+          if (att.tier_level === 4 && !(att as any).is_resolved) {
             runFlagged = true;
             stageHasFlag = true;
           }
@@ -237,13 +244,91 @@ export default function TeacherStudentProfilePage() {
     });
   })();
 
+  const computedAchievements = useMemo(
+    () => computeStudentAchievements(student || undefined, recentAttempts),
+    [student, recentAttempts]
+  );
+
+  const unlockedAchievementsCount = useMemo(
+    () => computedAchievements.filter((a) => a.unlocked).length,
+    [computedAchievements]
+  );
+
+  const showcaseBadges = useMemo(() => {
+    const unlocked = computedAchievements.filter((a) => a.unlocked);
+    const locked = computedAchievements.filter((a) => !a.unlocked);
+    return [...unlocked, ...locked].slice(0, 4);
+  }, [computedAchievements]);
+
+  const dynamicStageAvgScore = useMemo(() => {
+    if (stageGroupedAssignments.length === 0) return student?.avg_score ?? 0;
+    const sum = stageGroupedAssignments.reduce((acc, stage) => acc + stage.avgScore, 0);
+    return Math.round((sum / stageGroupedAssignments.length) * 10) / 10;
+  }, [stageGroupedAssignments, student]);
+
   useEffect(() => {
     if (id) {
       fetchStudentScores(id)
         .then((scores) => setRecentAttempts(scores || []))
         .catch(() => setRecentAttempts([]));
+      fetchCurriculumStages()
+        .then((curriculum) => setCurriculumData(curriculum))
+        .catch(() => setCurriculumData(null));
+      fetchStudentStageProgress(id)
+        .then((prog) => setStageProgressData(prog))
+        .catch(() => setStageProgressData(null));
     }
   }, [id]);
+
+  const uniqueSections = useMemo(() => {
+    const rawSecs = curriculumData?.sections || [];
+    const seenTitles = new Set<string>();
+    const uniqueSecs: any[] = [];
+    for (const s of rawSecs) {
+      if (s.title && !seenTitles.has(s.title)) {
+        seenTitles.add(s.title);
+        uniqueSecs.push(s);
+      }
+    }
+    return uniqueSecs;
+  }, [curriculumData]);
+
+  const stagePath = useMemo(() => {
+    const currentSec = uniqueSections[activeSectionIndex] || uniqueSections[0];
+    const stagesList = currentSec?.units?.[0]?.stages || [];
+    const officialPassedStages = new Set<number>();
+    const officialUnlockedStages = new Set<number>();
+    if (stageProgressData?.stages) {
+      for (const st of stageProgressData.stages) {
+        if (st.passed) officialPassedStages.add(st.stage_id);
+        if (st.unlocked) officialUnlockedStages.add(st.stage_id);
+      }
+    }
+    if (stageProgressData?.unlocked_stages) {
+      for (const u of stageProgressData.unlocked_stages) {
+        officialUnlockedStages.add(u);
+      }
+    }
+
+    return stagesList.map((dynStage: any, sIdx: number) => {
+      const sNum = sIdx + 1;
+      const dynStageId = dynStage?.id ?? sNum;
+      const isPassed = officialPassedStages.has(dynStageId);
+      const isUnlocked = officialUnlockedStages.has(dynStageId) || (sNum === 1);
+      const isCurrent = !isPassed && isUnlocked;
+      const title = `Stage ${sNum}`;
+      const subtitle = dynStage?.title || `Stage ${sNum}`;
+
+      return {
+        stageId: dynStageId,
+        stageNumber: sNum,
+        title,
+        subtitle,
+        status: isPassed ? "completed" : isCurrent ? "current" : "locked",
+        progressPercentage: isPassed ? 100 : isCurrent ? 50 : 0,
+      };
+    });
+  }, [uniqueSections, activeSectionIndex, stageProgressData]);
 
   if (loading) return <LoadingState />;
 
@@ -273,7 +358,7 @@ export default function TeacherStudentProfilePage() {
           {/* Average Score Card */}
           <StatCard label="Average Score">
             <h3 className="heading-2 text-(--success)">
-              {student.avg_score ?? 0}%
+              {dynamicStageAvgScore}%
             </h3>
           </StatCard>
 
@@ -295,115 +380,81 @@ export default function TeacherStudentProfilePage() {
         </div>
 
         {/* Learning Path & Achievements Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Learning Path Progress */}
-          <div className="lg:col-span-2 min-h-60 flex flex-col justify-between rounded-3xl border-3 border-(--border) bg-(--white) p-6 shadow-[0_6px_0_0_#BDC8D2]">
-            <div className="w-full flex items-center justify-between">
-              <h3 className="heading-3 text-(--primary)">
-                Learning Path Progress
-              </h3>
-              <span className="text-sm font-semibold text-(--ghost)">
-                {student.stages_complete ?? 0} Stages Completed
-              </span>
-            </div>
-
-            <div className="flex items-center justify-around gap-3 py-6 overflow-x-auto">
-              {[1, 2, 3, 4].map((stageNum) => {
-                const isPassed = (student.stages_complete ?? 0) >= stageNum;
-                const isCurrent =
-                  (student.stages_complete ?? 0) === stageNum - 1;
-
-                return (
-                  <div
-                    key={stageNum}
-                    className={`flex flex-col items-center justify-center w-28 h-32 rounded-2xl border-2 transition-all ${
-                      isPassed
-                        ? "bg-emerald-50 border-emerald-400 text-emerald-700 shadow-sm"
-                        : isCurrent
-                          ? "bg-orange-50 border-(--primary) text-(--primary) shadow-sm"
-                          : "bg-gray-50 border-gray-200 text-gray-400"
-                    }`}
-                  >
-                    <span className="text-xs font-bold uppercase tracking-wider">
-                      Stage
-                    </span>
-                    <span className="text-3xl font-extrabold my-1">
-                      {stageNum}
-                    </span>
-                    <span className="text-xs font-semibold">
-                      {isPassed
-                        ? "Completed"
-                        : isCurrent
-                          ? "Current"
-                          : "Locked"}
-                    </span>
-                  </div>
-                );
-              })}
-            </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-stretch">
+          {/* Detailed Learning Path Progress (2 cols) */}
+          <div className="lg:col-span-2 flex flex-col">
+            <DetailedLearningPath
+              className="h-full flex-1"
+              sections={uniqueSections}
+              activeSectionIndex={activeSectionIndex}
+              onSectionChange={(idx) => setActiveSectionIndex(idx)}
+              stages={stagePath}
+              completedStagesCount={student.stages_complete ?? 0}
+              onSelectStage={(stageId, stageTitle, stageNumber) => {
+                setSelectedStage({
+                  stageId,
+                  title: stageTitle,
+                  relativeStageNum: stageNumber,
+                });
+                setIsAnalyticsOpen(true);
+              }}
+            />
           </div>
 
-          {/* Dynamic Achievements */}
-          <div className="flex min-h-60 flex-col justify-between rounded-3xl border-3 border-(--border) bg-(--white) p-6 shadow-[0_6px_0_0_#BDC8D2]">
-            <h3 className="heading-3 text-(--primary)">Achievements</h3>
-
-            <div className="grid grid-cols-2 gap-3 py-2">
-              <div
-                className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all ${
-                  recentAttempts.length > 0
-                    ? "bg-amber-50 border-amber-300 text-amber-800 shadow-xs"
-                    : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
-                }`}
-              >
-                <span className="text-2xl">⚡</span>
-                <span className="text-xs font-bold mt-1">Fast Learner</span>
-                <span className="text-[10px] font-medium">
-                  {recentAttempts.length > 0 ? "Unlocked" : "Locked"}
+          {/* Dynamic Achievements Hub (1 col) */}
+          <div className="flex flex-col justify-between rounded-3xl border-3 border-(--border) bg-(--white) p-6 shadow-[0_6px_0_0_#BDC8D2] h-full">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="heading-3 text-(--primary) flex items-center gap-1.5">
+                  <Trophy className="size-5 text-amber-500" />
+                  Achievements
+                </h3>
+                <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 inline-block mt-1">
+                  {unlockedAchievementsCount} of {computedAchievements.length} Badges Unlocked
                 </span>
               </div>
-
-              <div
-                className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all ${
-                  (student.avg_score ?? 0) >= 80
-                    ? "bg-emerald-50 border-emerald-300 text-emerald-800 shadow-xs"
-                    : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
-                }`}
+              <button
+                type="button"
+                onClick={() => setIsAchievementsOpen(true)}
+                className="text-xs font-bold text-orange-600 hover:text-orange-700 hover:underline flex items-center gap-0.5 cursor-pointer"
               >
-                <span className="text-2xl">🏆</span>
-                <span className="text-xs font-bold mt-1">Sign Master</span>
-                <span className="text-[10px] font-medium">
-                  {(student.avg_score ?? 0) >= 80 ? "Unlocked" : "Locked"}
-                </span>
-              </div>
-
-              <div
-                className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all ${
-                  (student.streak ?? 0) >= 3
-                    ? "bg-orange-50 border-orange-300 text-orange-800 shadow-xs"
-                    : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
-                }`}
-              >
-                <span className="text-2xl">🔥</span>
-                <span className="text-xs font-bold mt-1">Dedicated</span>
-                <span className="text-[10px] font-medium">
-                  {(student.streak ?? 0) >= 3 ? "Unlocked" : "Locked"}
-                </span>
-              </div>
-
-              <div
-                className={`flex flex-col items-center justify-center p-3 rounded-2xl border text-center transition-all ${
-                  (student.stages_complete ?? 0) >= 1
-                    ? "bg-blue-50 border-blue-300 text-blue-800 shadow-xs"
-                    : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
-                }`}
-              >
-                <span className="text-2xl">🎖️</span>
-                <span className="text-xs font-bold mt-1">Stage Champ</span>
-                <span className="text-[10px] font-medium">
-                  {(student.stages_complete ?? 0) >= 1 ? "Unlocked" : "Locked"}
-                </span>
-              </div>
+                View All &rarr;
+              </button>
             </div>
+
+            {/* Quick 4 Badges Showcase */}
+            <div className="grid grid-cols-2 gap-3 py-2 flex-1 items-stretch">
+              {showcaseBadges.map((badge) => (
+                <div
+                  key={badge.id}
+                  onClick={() => setIsAchievementsOpen(true)}
+                  className={`flex flex-col items-center justify-center p-2.5 rounded-2xl border text-center transition-all cursor-pointer hover:scale-105 active:scale-95 ${
+                    badge.unlocked
+                      ? "bg-amber-50/70 border-amber-300 text-amber-900 shadow-xs"
+                      : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
+                  }`}
+                  title={`${badge.title}: ${badge.description}`}
+                >
+                  <span className={`text-2xl mb-1 select-none transition-transform ${badge.unlocked ? "" : "grayscale opacity-50"}`}>
+                    {badge.icon}
+                  </span>
+                  <span className="text-xs font-bold mt-0.5 line-clamp-1">{badge.title}</span>
+                  <span className={`text-[10px] font-extrabold ${badge.unlocked ? "text-emerald-700" : "text-gray-400"}`}>
+                    {badge.unlocked ? "Unlocked" : "In Progress"}
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* View All Button */}
+            <button
+              type="button"
+              onClick={() => setIsAchievementsOpen(true)}
+              className="w-full py-2.5 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
+            >
+              <Sparkles className="size-4" />
+              View All 20 Achievements
+            </button>
           </div>
         </div>
 
@@ -686,6 +737,22 @@ export default function TeacherStudentProfilePage() {
           attemptNumber={selectedStage.attemptNumber}
           isOpen={isAnalyticsOpen}
           onClose={() => setIsAnalyticsOpen(false)}
+        />
+      )}
+
+      {/* All Achievements Modal */}
+      {student && (
+        <AchievementsModal
+          isOpen={isAchievementsOpen}
+          onClose={() => setIsAchievementsOpen(false)}
+          studentName={student.name}
+          gradeLevel={student.grade_level}
+          level={student.level}
+          avgScore={student.avg_score}
+          signsMastered={student.signs_mastered}
+          stagesComplete={student.stages_complete}
+          streak={student.streak}
+          achievements={computedAchievements}
         />
       )}
     </div>

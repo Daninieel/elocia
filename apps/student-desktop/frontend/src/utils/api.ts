@@ -359,16 +359,106 @@ export interface PracticeItem {
   reason?: string;
 }
 
-export async function fetchNeedsPractice(studentId: string): Promise<PracticeItem[]> {
-  try {
-    const res = await fetch(`${API_BASE}/analytics/students/${studentId}/needs-practice`);
-    if (!res.ok) return [];
-    const data = await res.json();
-    return data.practice_items || [];
-  } catch (err) {
-    console.warn('Failed to fetch needs practice items (offline?):', err);
-    return [];
+export async function fetchNeedsPractice(studentId?: string): Promise<PracticeItem[]> {
+  const sid = studentId && String(studentId).trim() ? String(studentId).trim() : 'all';
+  const colors: ('red' | 'orange' | 'green' | 'blue')[] = ['red', 'orange', 'green', 'blue'];
+
+  const parseDrillResponse = (drill: any): PracticeItem[] => {
+    if (!drill || !drill.active || !Array.isArray(drill.signs) || drill.signs.length === 0) return [];
+    let stageId = drill.stage_number || drill.stage_id || 1;
+    if (stageId === 43) stageId = 2;
+
+    let sectionLabel = drill.section_label;
+    const signsLower = drill.signs.map((s: any) => String(s).toLowerCase());
+    const isColorSign = signsLower.some((s: string) => ['green', 'grey', 'red', 'blue', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white'].includes(s));
+
+    if (!sectionLabel || sectionLabel.includes('Stage 43') || (isColorSign && sectionLabel.startsWith('Section 1'))) {
+      if (isColorSign) {
+        sectionLabel = `Section 3, Stage ${stageId}`;
+      } else {
+        sectionLabel = `Stage ${stageId}`;
+      }
+    } else {
+      sectionLabel = sectionLabel.replace('Stage 43', 'Stage 2');
+    }
+
+    return drill.signs.map((sign: string, idx: number) => ({
+      sign: String(sign),
+      stage_id: stageId,
+      section_label: sectionLabel,
+      score: 50.0,
+      color: colors[idx % colors.length],
+      reason: drill.notes || 'Teacher Assigned Focus Drill',
+    }));
+  };
+
+  const tryFetchUrl = async (baseUrl: string): Promise<PracticeItem[] | null> => {
+    try {
+      // 1. Check drills endpoint for student ID
+      if (sid !== 'all') {
+        const drillRes = await fetch(`${baseUrl}/analytics/drills/student/${sid}`);
+        if (drillRes.ok) {
+          const data = await drillRes.json();
+          const items = parseDrillResponse(data.drill);
+          if (items.length > 0) return items;
+        }
+      }
+
+      // 2. Check drills endpoint for broadcast ('all')
+      const drillAllRes = await fetch(`${baseUrl}/analytics/drills/student/all`);
+      if (drillAllRes.ok) {
+        const data = await drillAllRes.json();
+        const items = parseDrillResponse(data.drill);
+        if (items.length > 0) return items;
+      }
+
+      // 3. Try needs-practice endpoint if sid is a valid UUID (avoids 422 error on Render)
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid);
+      if (isUuid) {
+        const npRes = await fetch(`${baseUrl}/analytics/students/${sid}/needs-practice`);
+        if (npRes.ok) {
+          const data = await npRes.json();
+          if (Array.isArray(data.practice_items) && data.practice_items.length > 0) {
+            return (data.practice_items as PracticeItem[]).map((it) => {
+              const cleanStage = it.stage_id === 43 ? 2 : it.stage_id;
+              let label = it.section_label;
+              const sLower = String(it.sign).toLowerCase();
+              const isColor = ['green', 'grey', 'red', 'blue', 'yellow', 'orange', 'purple', 'pink', 'brown', 'black', 'white'].includes(sLower);
+              if (!label || label.includes('Stage 43') || (isColor && label.startsWith('Section 1'))) {
+                if (isColor) {
+                  label = `Section 3, Stage ${cleanStage}`;
+                } else {
+                  label = `Stage ${cleanStage}`;
+                }
+              }
+              return {
+                ...it,
+                stage_id: cleanStage,
+                section_label: label,
+              };
+            });
+          }
+        }
+      }
+    } catch {}
+    return null;
+  };
+
+  const primaryBase = String(API_BASE);
+  const candidateBases = [primaryBase];
+  if (!primaryBase.includes('localhost:8000') && !primaryBase.includes('127.0.0.1:8000')) {
+    candidateBases.push('http://localhost:8000');
+    candidateBases.push('http://127.0.0.1:8000');
   }
+
+  for (const base of candidateBases) {
+    const items = await tryFetchUrl(base);
+    if (items && items.length > 0) {
+      return items;
+    }
+  }
+
+  return [];
 }
 
 export interface EducationalVideoItem {
@@ -416,22 +506,44 @@ export async function fetchActiveFocusDrill(studentId: string): Promise<FocusDri
   }
 }
 
-export async function completeFocusDrill(studentId: string): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/analytics/drills/student/${studentId}/complete`, { method: 'POST' });
-  } catch (err) {
-    console.warn('Failed to complete focus drill:', err);
+export async function completeFocusDrill(studentId: string, stageId?: number, signs?: string[]): Promise<void> {
+  const bases = [String(API_BASE), 'http://localhost:8000', 'http://127.0.0.1:8000', 'https://elocia.onrender.com'];
+  const payload = JSON.stringify({ stage_id: stageId, signs: signs || [] });
+  for (const base of bases) {
+    try {
+      await fetch(`${base}/analytics/drills/student/${studentId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+    } catch {}
+    try {
+      await fetch(`${base}/analytics/drills/student/all/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+    } catch {}
   }
 }
 
-export async function removeFocusDrillSign(studentId: string, sign: string): Promise<void> {
-  try {
-    await fetch(`${API_BASE}/analytics/drills/student/${studentId}/remove-sign`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sign }),
-    });
-  } catch (err) {
-    console.warn('Failed to remove focus drill sign:', err);
+export async function removeFocusDrillSign(studentId: string, sign: string, stageId?: number): Promise<void> {
+  const bases = [String(API_BASE), 'http://localhost:8000', 'http://127.0.0.1:8000', 'https://elocia.onrender.com'];
+  const payload = JSON.stringify({ sign, stage_id: stageId });
+  for (const base of bases) {
+    try {
+      await fetch(`${base}/analytics/drills/student/${studentId}/remove-sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+    } catch {}
+    try {
+      await fetch(`${base}/analytics/drills/student/all/remove-sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: payload,
+      });
+    } catch {}
   }
 }

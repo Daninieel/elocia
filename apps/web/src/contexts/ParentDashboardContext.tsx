@@ -276,9 +276,9 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
       const targetList = masteryAttempts.length > 0 ? masteryAttempts : validAttempts;
 
       const realAvg = summaryData?.avg_score
-        ? Math.round(summaryData.avg_score)
+        ? Number(Number(summaryData.avg_score).toFixed(1))
         : targetList.length > 0
-        ? Math.round(targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + a.score_overall, 0) / targetList.length)
+        ? Number((targetList.reduce((acc: number, a: EvaluationAttemptItem) => acc + a.score_overall, 0) / targetList.length).toFixed(1))
         : 0;
 
       const realStreak = child?.streak ?? summaryData?.streak ?? 0;
@@ -366,21 +366,28 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
 
       setRawCurriculum(curriculumData);
 
-      // Learning Path Stages
-      const currentSec = curriculumData?.sections?.[sectionIdx] || curriculumData?.sections?.[0];
-      const stagesList = (currentSec?.units?.[0]?.stages) || (curriculumData?.sections?.[0]?.units?.[0]?.stages) || [];
-      const defaultSubtitles = ["Numbers (0-10)", "Numbers (11-20)", "Numbers (21-30)", "Numbers (31-40)"];
-      const targetCount = stagesList.length > 0 ? stagesList.length : 4;
+      // Deduplicate sections by title so Numbers, Alphabet, Colors, Shapes are distinct
+      const rawSecs = curriculumData?.sections || [];
+      const seenTitles = new Set<string>();
+      const uniqueSecs: any[] = [];
+      for (const s of rawSecs) {
+        if (s.title && !seenTitles.has(s.title)) {
+          seenTitles.add(s.title);
+          uniqueSecs.push(s);
+        }
+      }
 
-      const newStagePath: StagePathItem[] = Array.from({ length: targetCount }).map((_, sIdx) => {
+      const currentSec = uniqueSecs[sectionIdx] || uniqueSecs[0];
+      const stagesList = currentSec?.units?.[0]?.stages || [];
+
+      const newStagePath: StagePathItem[] = stagesList.map((dynStage: any, sIdx: number) => {
         const sNum = sIdx + 1;
-        const dynStage = stagesList[sIdx];
         const dynStageId = dynStage?.id ?? sNum;
-        const isPassed = officialPassedStages.has(sNum) || officialPassedStages.has(dynStageId);
-        const isUnlocked = officialUnlockedStages.has(sNum) || officialUnlockedStages.has(dynStageId) || (sNum === 1 && sectionIdx === 0);
+        const isPassed = officialPassedStages.has(dynStageId);
+        const isUnlocked = officialUnlockedStages.has(dynStageId) || (sNum === 1);
         const isCurrent = !isPassed && isUnlocked;
-        const title = dynStage?.title || `Stage ${sNum}`;
-        const subtitle = dynStage?.description || defaultSubtitles[sIdx] || `Numbers (${(sNum - 1) * 10 + 1}-${sNum * 10})`;
+        const title = `Stage ${sNum}`;
+        const subtitle = dynStage?.title || `Stage ${sNum}`;
 
         return {
           stageId: dynStageId,
@@ -451,7 +458,18 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
     loadChildMetrics(selectedChild, activeSectionIndex);
   }, [selectedChild, activeSectionIndex, loadChildMetrics]);
 
-  const sections = rawCurriculum?.sections || [];
+  const sections = useMemo(() => {
+    const rawSecs = rawCurriculum?.sections || [];
+    const seenTitles = new Set<string>();
+    const uniqueSecs: any[] = [];
+    for (const s of rawSecs) {
+      if (s.title && !seenTitles.has(s.title)) {
+        seenTitles.add(s.title);
+        uniqueSecs.push(s);
+      }
+    }
+    return uniqueSecs;
+  }, [rawCurriculum]);
 
   const value = useMemo<ParentDashboardContextValue>(
     () => ({

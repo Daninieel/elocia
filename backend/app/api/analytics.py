@@ -15,6 +15,16 @@ from app.schemas.analytics import (
     ParentProgressSummary
 )
 from app.core.streak import get_effective_streak
+from app.api.users import compute_student_stage_average
+from app.core.focus_drills import (
+    get_active_drill,
+    set_active_drill,
+    clear_active_drill,
+    mark_sign_resolved,
+    mark_drill_completed,
+    is_sign_resolved,
+    get_resolved_keys_for_student
+)
 
 router = APIRouter(prefix="/analytics", tags=["Learning Analytics (Module 2)"])
 
@@ -144,27 +154,38 @@ async def get_parent_progress_summary(student_id: uuid.UUID, db: AsyncSession = 
         )
 
     # Calculate parameter averages for this student based on culminating performance per sign:
-    # Deduplicates by sign so early struggle/scaffolded failures don't permanently drag down the overall report.
+    # Deduplicates by sign and records culminating passed attempt (or tier 4) consistent with users.py and curriculum guidelines.
     all_student_attempts_res = await db.execute(
         select(EvaluationAttempt)
         .where(EvaluationAttempt.student_id == student_id)
-        .order_by(EvaluationAttempt.created_at.desc())
+        .order_by(EvaluationAttempt.created_at.asc())
     )
     all_student_attempts = all_student_attempts_res.scalars().all()
 
-    latest_per_sign = {}
+    signs_map = {}
     for a in all_student_attempts:
-        key = f"{a.stage_id or 1}_{a.sign_id or 1}"
-        if key not in latest_per_sign:
-            latest_per_sign[key] = a
+        stg = a.stage_id_new or a.stage_id or 1
+        key = f"{stg}_{a.sign_id or 1}"
+        signs_map.setdefault(key, []).append(a)
 
-    mastery_list = list(latest_per_sign.values()) if latest_per_sign else all_student_attempts
+    mastery_list = []
+    for key, atts in signs_map.items():
+        passed = [a for a in atts if a.passed and (a.tier_level or 1) < 4]
+        t4 = [a for a in atts if (a.tier_level or 0) >= 4]
+        if passed:
+            chosen = passed[-1]
+        elif t4:
+            chosen = t4[-1]
+        else:
+            chosen = atts[-1]
+        mastery_list.append(chosen)
+
     if mastery_list:
         avg_h = round(float(sum((a.score_handshape or 0.0) for a in mastery_list) / len(mastery_list)), 1)
         avg_p = round(float(sum((a.score_palm_orientation or 0.0) for a in mastery_list) / len(mastery_list)), 1)
         avg_l = round(float(sum((a.score_location or 0.0) for a in mastery_list) / len(mastery_list)), 1)
         avg_m = round(float(sum((a.score_movement or 0.0) for a in mastery_list) / len(mastery_list)), 1)
-        avg_score = round(float(sum((a.score_overall or 0.0) for a in mastery_list) / len(mastery_list)), 2)
+        avg_score = compute_student_stage_average(all_student_attempts)
     else:
         avg_h = avg_p = avg_l = avg_m = avg_score = 0.0
 
@@ -199,7 +220,7 @@ async def get_parent_progress_summary(student_id: uuid.UUID, db: AsyncSession = 
 
 
 @router.get("/students/{student_id}/needs-practice")
-async def get_student_needs_practice(student_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_student_needs_practice(student_id: str, db: AsyncSession = Depends(get_db)):
     """
     Returns the specific signs and stages a student struggled with (score < 60 or Tier 4 flag),
     or signs assigned by the teacher via 'Create Focus Drill'.
@@ -211,16 +232,28 @@ async def get_student_needs_practice(student_id: uuid.UUID, db: AsyncSession = D
 
     # Only display focus drills explicitly created by the teacher via the Teacher Portal ("Create Focus Drill")
     # Review stages and automatic Tier 4 attempts do NOT automatically trigger practice drills unless assigned by teacher.
-    drill = _ACTIVE_FOCUS_DRILLS.get(str(student_id)) or _ACTIVE_FOCUS_DRILLS.get("all")
+    drill = get_active_drill(str(student_id))
     if drill and drill.get("active") and drill.get("signs"):
-        stage_id = drill.get("stage_id", 1)
+        raw_stage_id = drill.get("stage_id", 1)
+        stage_number = drill.get("stage_number") or raw_stage_id
+        if stage_number == 43:
+            stage_number = 2
+
+        section_label = drill.get("section_label")
+        if not section_label or "Stage 43" in section_label or section_label == "Section 1, Stage 43":
+            signs_lower = [str(s).lower() for s in drill.get("signs", [])]
+            if any(s in ["green", "grey", "red", "blue", "yellow", "orange", "purple", "pink", "brown", "black", "white"] for s in signs_lower):
+                section_label = f"Section 3, Stage {stage_number}"
+            else:
+                section_label = f"Stage {stage_number}"
+
         for sign in drill["signs"]:
             if sign and sign not in seen_signs:
                 seen_signs.add(sign)
                 cards.append({
                     "sign": sign,
-                    "stage_id": stage_id,
-                    "section_label": f"Section 1, Stage {stage_id}",
+                    "stage_id": stage_number,
+                    "section_label": section_label,
                     "score": 50.0,
                     "color": colors[len(cards) % len(colors)],
                     "reason": drill.get("notes") or "Teacher Assigned Focus Drill"
@@ -234,7 +267,7 @@ _ACTIVE_FOCUS_DRILLS: dict = {}
 
 @router.get("/students/{student_id}/unit-analytics")
 async def get_student_unit_analytics(
-    student_id: uuid.UUID,
+    student_id: str,
     stage_id: int = 1,
     attempt_index: int = None,
     db: AsyncSession = Depends(get_db)
@@ -244,15 +277,34 @@ async def get_student_unit_analytics(
     and performance trend for a specific student and stage/unit.
     Supports attempt_index (1-based) to inspect specific Stage Playthrough Attempts.
     """
-    stud_res = await db.execute(
-        select(User, StudentProfile)
-        .outerjoin(StudentProfile, User.id == StudentProfile.student_id)
-        .where(User.id == student_id)
-    )
+    # Resilient student resolution: UUID or student_number / username
+    target_uuid = None
+    try:
+        target_uuid = uuid.UUID(str(student_id))
+    except (ValueError, AttributeError):
+        pass
+
+    if target_uuid:
+        stud_res = await db.execute(
+            select(User, StudentProfile)
+            .outerjoin(StudentProfile, User.id == StudentProfile.student_id)
+            .where(User.id == target_uuid)
+        )
+    else:
+        # Fallback to student_number or username
+        stud_res = await db.execute(
+            select(User, StudentProfile)
+            .outerjoin(StudentProfile, User.id == StudentProfile.student_id)
+            .where(
+                (User.username == str(student_id)) |
+                (StudentProfile.student_number == (int(student_id) if str(student_id).isdigit() else -1))
+            )
+        )
     student_row = stud_res.first()
     if not student_row:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     user, profile = student_row
+    student_uuid = user.id
 
     # Resolve stage: check if stage_id matches CurriculumStage by id or stage_number
     stage_res = await db.execute(
@@ -272,7 +324,7 @@ async def get_student_unit_analytics(
     attempts_res = await db.execute(
         select(EvaluationAttempt)
         .where(
-            EvaluationAttempt.student_id == student_id,
+            EvaluationAttempt.student_id == student_uuid,
             (EvaluationAttempt.stage_id_new == target_pk) | (EvaluationAttempt.stage_id.in_(stage_filter))
         )
         .order_by(EvaluationAttempt.created_at.desc())
@@ -283,7 +335,7 @@ async def get_student_unit_analytics(
     if not attempts:
         all_att_res = await db.execute(
             select(EvaluationAttempt)
-            .where(EvaluationAttempt.student_id == student_id)
+            .where(EvaluationAttempt.student_id == student_uuid)
             .order_by(EvaluationAttempt.created_at.desc())
             .limit(20)
         )
@@ -295,6 +347,24 @@ async def get_student_unit_analytics(
     for sid, sname in baseline_res.all():
         if sid:
             sign_names[sid] = sname
+
+    # Look up passed practice attempts for this student to resolve any prior Tier 4 struggles
+    passed_practice_res = await db.execute(
+        select(EvaluationAttempt.sign_id, EvaluationAttempt.score_overall, FSLBaseline.sign_name)
+        .outerjoin(FSLBaseline, EvaluationAttempt.sign_id == FSLBaseline.sign_id)
+        .where(
+            EvaluationAttempt.student_id == student_uuid,
+            EvaluationAttempt.activity_type == "practice",
+            EvaluationAttempt.passed == True
+        )
+    )
+    passed_practice_signs = set()
+    for p_sid, p_score, p_sname in passed_practice_res.all():
+        if p_sid:
+            passed_practice_signs.add(p_sid)
+            passed_practice_signs.add(str(p_sid))
+        if p_sname:
+            passed_practice_signs.add(p_sname.strip().lower())
 
     # Segment all evaluation attempts of this stage into distinct Stage Playthroughs (Attempt 1, Attempt 2, ..., Attempt N):
     attempts_chrono = sorted(attempts, key=lambda x: (x.created_at, x.id))
@@ -336,8 +406,16 @@ async def get_student_unit_analytics(
         run_rec_scores = []
         for sid, s_atts in run_signs.items():
             t4 = next((a for a in s_atts if a.tier_level and a.tier_level >= 4), None)
+            s_name = sign_names.get(sid, f"Sign {sid}")
+            is_resolved = is_sign_resolved(
+                student_id=str(student_uuid),
+                stage_id=target_pk,
+                sign_id=sid,
+                sign_name=s_name,
+                passed_practice_signs=passed_practice_signs
+            )
             passed = next((a for a in s_atts if a.passed and (a.tier_level or 1) < 4), None)
-            if t4:
+            if t4 and not is_resolved:
                 has_t4_run = True
             rec = passed if passed else (t4 if t4 else s_atts[-1])
             if rec.score_overall is not None:
@@ -375,6 +453,14 @@ async def get_student_unit_analytics(
 
     for s_id, round_atts in attempts_by_sign.items():
         round_atts_chrono = sorted(round_atts, key=lambda x: (x.created_at, x.attempt_number or 0))
+        s_name = sign_names.get(s_id, f"Sign {s_id}")
+        is_resolved = is_sign_resolved(
+            student_id=str(student_uuid),
+            stage_id=target_pk,
+            sign_id=s_id,
+            sign_name=s_name,
+            passed_practice_signs=passed_practice_signs
+        )
         # Check for Tier 4 struggle attempt
         t4_att = next((a for a in round_atts_chrono if a.tier_level and a.tier_level >= 4), None)
         # Check for authentic passed attempt at normal tiers (Tier 1, 2, or 3)
@@ -383,6 +469,9 @@ async def get_student_unit_analytics(
         if passed_att:
             # Rule 1: Passed attempt is recorded for that round (e.g. Attempt 3 at Tier 2)
             recorded_attempt_by_sign[s_id] = passed_att
+        elif is_resolved:
+            # Resolved via focus drill / practice pass: not Tier 4 struggle anymore!
+            recorded_attempt_by_sign[s_id] = t4_att if t4_att else round_atts_chrono[-1]
         elif t4_att:
             # Rule 2: If Tier 4, record the culminating last attempt with authentic MediaPipe scores
             tier4_attempt_by_sign[s_id] = t4_att
@@ -390,7 +479,7 @@ async def get_student_unit_analytics(
         else:
             # Incomplete or failed attempts without tier 4
             last_att = round_atts_chrono[-1]
-            if last_att.tier_level and last_att.tier_level >= 4:
+            if last_att.tier_level and last_att.tier_level >= 4 and not is_resolved:
                 tier4_attempt_by_sign[s_id] = last_att
             recorded_attempt_by_sign[s_id] = last_att
 
@@ -427,7 +516,7 @@ async def get_student_unit_analytics(
     lowest_param = min(param_dict, key=param_dict.get)
     diagnostic_insight = f"Student is struggling slightly with {lowest_param} parameters. Consider focusing practice on spatial positioning and accuracy."
 
-    # Identify all signs in this stage that triggered Tier 4 struggle for targeted focus drills:
+    # Identify signs in this stage that triggered Tier 4 struggle ONLY (Strict rule: Focus drills are ONLY for Tier 4 triggers)
     needs_practice = []
     seen_signs = set()
     for s_id, t4_att in tier4_attempt_by_sign.items():
@@ -508,8 +597,15 @@ async def get_student_unit_analytics(
     if stage_baselines:
         for b in stage_baselines:
             rec_att = recorded_attempt_by_sign.get(b.sign_id)
-            has_t4 = b.sign_id in tier4_attempt_by_sign or (rec_att and rec_att.tier_level and rec_att.tier_level >= 4)
-            is_passed = bool(rec_att and rec_att.passed and not has_t4 and (rec_att.tier_level or 1) < 4)
+            is_resolved = is_sign_resolved(
+                student_id=str(student_uuid),
+                stage_id=target_pk,
+                sign_id=b.sign_id,
+                sign_name=b.sign_name,
+                passed_practice_signs=passed_practice_signs
+            )
+            has_t4 = (b.sign_id in tier4_attempt_by_sign) and not is_resolved
+            is_passed = bool((rec_att and rec_att.passed) or is_resolved)
             if rec_att:
                 rounds_data.append({
                     "sign_id": b.sign_id,
@@ -520,7 +616,7 @@ async def get_student_unit_analytics(
                     "score_location": round(rec_att.score_location or 0.0, 1),
                     "score_movement": round(rec_att.score_movement or 0.0, 1),
                     "passed": is_passed,
-                    "tier_level": 4 if has_t4 else (rec_att.tier_level or 1),
+                    "tier_level": (rec_att.tier_level or 1) if not is_resolved else 1,
                     "has_tier4": bool(has_t4),
                     "attempt_number": rec_att.attempt_number or 1,
                     "attempted_at": str(rec_att.created_at) if rec_att.created_at else None
@@ -534,7 +630,7 @@ async def get_student_unit_analytics(
                     "score_palm_orientation": 0.0,
                     "score_location": 0.0,
                     "score_movement": 0.0,
-                    "passed": False,
+                    "passed": bool(is_resolved),
                     "tier_level": 1,
                     "has_tier4": False,
                     "attempt_number": 0,
@@ -543,8 +639,15 @@ async def get_student_unit_analytics(
     else:
         for s_id, rec_att in recorded_attempt_by_sign.items():
             name = sign_names.get(s_id, f"Sign {s_id}")
-            has_t4 = s_id in tier4_attempt_by_sign or (rec_att and rec_att.tier_level and rec_att.tier_level >= 4)
-            is_passed = bool(rec_att and rec_att.passed and not has_t4 and (rec_att.tier_level or 1) < 4)
+            is_resolved = is_sign_resolved(
+                student_id=str(student_uuid),
+                stage_id=target_pk,
+                sign_id=s_id,
+                sign_name=name,
+                passed_practice_signs=passed_practice_signs
+            )
+            has_t4 = (s_id in tier4_attempt_by_sign) and not is_resolved
+            is_passed = bool((rec_att and rec_att.passed) or is_resolved)
             rounds_data.append({
                 "sign_id": s_id,
                 "sign_name": name,
@@ -554,14 +657,35 @@ async def get_student_unit_analytics(
                 "score_location": round(rec_att.score_location or 0.0, 1),
                 "score_movement": round(rec_att.score_movement or 0.0, 1),
                 "passed": is_passed,
-                "tier_level": 4 if has_t4 else (rec_att.tier_level or 1),
+                "tier_level": (rec_att.tier_level or 1) if not is_resolved else 1,
                 "has_tier4": bool(has_t4),
                 "attempt_number": rec_att.attempt_number or 1,
                 "attempted_at": str(rec_att.created_at) if rec_att.created_at else None
             })
 
+    all_stage_signs = [
+        {
+            "sign_id": r["sign_id"],
+            "name": r["sign_name"],
+            "score": r["score_overall"],
+            "passed": r["passed"],
+            "tier_level": r["tier_level"],
+            "attempt_number": r["attempt_number"]
+        }
+        for r in rounds_data
+    ]
+
+    active_drill = get_active_drill(str(student_id)) or get_active_drill(str(user.id)) or get_active_drill("all")
+    if active_drill and not active_drill.get("active"):
+        active_drill = None
+
+    has_completed_drill = bool(
+        len(passed_practice_signs) > 0 or
+        len(get_resolved_keys_for_student(str(student_uuid))) > 0
+    )
+
     return {
-        "student_id": str(student_id),
+        "student_id": str(user.id),
         "student_name": user.name,
         "stage_id": target_pk,
         "stage_number": curr_stage.stage_number if curr_stage else stage_id,
@@ -574,6 +698,10 @@ async def get_student_unit_analytics(
         "parameter_mastery": parameter_mastery,
         "diagnostic_insight": diagnostic_insight,
         "needs_practice": needs_practice,
+        "all_stage_signs": all_stage_signs,
+        "active_drill": active_drill,
+        "has_completed_drill": has_completed_drill,
+        "resolved_signs": list(str(s) for s in passed_practice_signs),
         "performance_trend": trend,
         "rounds": rounds_data
     }
@@ -589,18 +717,45 @@ async def create_focus_drill(payload: dict, db: AsyncSession = Depends(get_db)):
     raw_sid = str(payload.get("student_id", "")).strip()
     student_id = raw_sid if raw_sid and raw_sid != "all" else "all"
     signs = payload.get("signs", [])
-    stage_id = payload.get("stage_id", 1)
+    raw_stage_id = payload.get("stage_id", 1)
+    stage_number = payload.get("stage_number") or raw_stage_id
+    if stage_number == 43:
+        stage_number = 2
+
+    section_label = payload.get("section_label")
+    if not section_label or "Stage 43" in section_label or section_label == "Section 1, Stage 43":
+        signs_lower = [str(s).lower() for s in signs]
+        if any(s in ["green", "grey", "red", "blue", "yellow", "orange", "purple", "pink", "brown", "black", "white"] for s in signs_lower):
+            section_label = f"Section 3, Stage {stage_number}"
+        else:
+            section_label = f"Stage {stage_number}"
+
     notes = payload.get("notes", "Teacher focus drill assigned")
 
     drill_record = {
         "id": str(uuid.uuid4()),
         "student_id": student_id,
-        "stage_id": stage_id,
+        "stage_id": stage_number,
+        "stage_number": stage_number,
+        "raw_stage_id": raw_stage_id,
+        "section_label": section_label,
         "signs": signs,
         "notes": notes,
         "active": True
     }
-    _ACTIVE_FOCUS_DRILLS[student_id] = drill_record
+    
+    aliases = []
+    if student_id != "all":
+        try:
+            target_u = uuid.UUID(student_id)
+            prof_res = await db.execute(select(StudentProfile).where(StudentProfile.student_id == target_u))
+            prof = prof_res.scalar_one_or_none()
+            if prof and prof.student_number:
+                aliases.append(str(prof.student_number))
+        except Exception:
+            pass
+
+    set_active_drill(student_id, drill_record, aliases=aliases)
 
     return {
         "status": "success",
@@ -610,26 +765,35 @@ async def create_focus_drill(payload: dict, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/drills/student/{student_id}")
-async def get_student_active_drill(student_id: str):
+async def get_student_active_drill_endpoint(student_id: str):
     """
     Endpoint for Student Desktop to fetch any assigned focus drill.
     Checks student-specific drill first, then falls back to any broadcast drill ('all').
     """
-    drill = _ACTIVE_FOCUS_DRILLS.get(str(student_id)) or _ACTIVE_FOCUS_DRILLS.get("all")
+    drill = get_active_drill(str(student_id))
     return {"drill": drill}
 
 
-@router.post("/drills/student/{student_id}/complete")
-async def complete_student_drill(student_id: str):
+@router.delete("/drills/student/{student_id}")
+@router.post("/drills/student/{student_id}/cancel")
+async def cancel_student_drill(student_id: str):
     """
-    Marks focus drill as complete / consumed.
+    Cancels/removes an active focus drill for a student.
+    """
+    clear_active_drill(student_id)
+    return {"status": "success", "message": "Focus drill cleared"}
+
+
+@router.post("/drills/student/{student_id}/complete")
+async def complete_student_drill(student_id: str, payload: dict = None):
+    """
+    Marks focus drill as complete / consumed and registers resolved Tier 4 state.
     """
     sid = str(student_id)
-    if sid in _ACTIVE_FOCUS_DRILLS:
-        _ACTIVE_FOCUS_DRILLS.pop(sid, None)
-    if "all" in _ACTIVE_FOCUS_DRILLS:
-        _ACTIVE_FOCUS_DRILLS.pop("all", None)
-    return {"status": "success"}
+    stage_id = payload.get("stage_id") if payload else None
+    signs = payload.get("signs") if payload else None
+    mark_drill_completed(student_id=sid, stage_id=stage_id, signs=signs)
+    return {"status": "success", "message": "Focus drill marked completed and struggles resolved"}
 
 
 @router.post("/drills/student/{student_id}/remove-sign")
@@ -639,13 +803,22 @@ async def remove_drill_sign(student_id: str, payload: dict):
     If all signs are mastered, completes and removes the drill completely.
     """
     sign_to_remove = str(payload.get("sign", "")).strip().lower()
-    targets = [str(student_id), "all"]
+    raw_stage_id = payload.get("stage_id")
+    mark_sign_resolved(student_id=student_id, stage_id=raw_stage_id, sign_name=sign_to_remove)
 
-    for t in targets:
-        if t in _ACTIVE_FOCUS_DRILLS:
-            drill = _ACTIVE_FOCUS_DRILLS[t]
+    for t in [str(student_id), "all"]:
+        drill = get_active_drill(t)
+        if drill:
             drill["signs"] = [s for s in drill.get("signs", []) if str(s).strip().lower() != sign_to_remove]
             if len(drill["signs"]) == 0:
-                _ACTIVE_FOCUS_DRILLS.pop(t, None)
+                clear_active_drill(t)
 
     return {"status": "success", "removed": sign_to_remove}
+
+
+@router.get("/drills/student/{student_id}/resolved")
+async def get_student_resolved_drills(student_id: str):
+    """
+    Returns resolved focus drill keys for student.
+    """
+    return {"resolved_keys": get_resolved_keys_for_student(student_id)}

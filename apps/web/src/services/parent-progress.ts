@@ -51,18 +51,19 @@ export async function fetchParentProgressSummary(
 export async function fetchStudentScores(
   studentId: string
 ): Promise<EvaluationAttemptItem[]> {
-  const response = await fetch(`${API_BASE_URL}/scores/${studentId}`, {
-    headers: {
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => null);
-    throw new Error(extractApiErrorMessage(error, "Failed to fetch student evaluation scores"));
+  const endpoints = [API_BASE_URL, "https://elocia.onrender.com"];
+  for (const base of endpoints) {
+    try {
+      const response = await fetch(`${base}/scores/${studentId}`, {
+        headers: { "Content-Type": "application/json" },
+      });
+      if (response.ok) {
+        return await response.json();
+      }
+    } catch {}
   }
 
-  return response.json();
+  throw new Error("Failed to fetch student evaluation scores from available endpoints");
 }
 
 const curriculumCache = new Map<string, any>();

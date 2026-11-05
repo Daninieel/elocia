@@ -12,6 +12,7 @@ from app.models.baseline import FSLBaseline, CurriculumStage, CurriculumUnit, Cu
 from app.models.minigame import MiniGameSession
 from app.schemas.score import ScoreSaveRequest
 from app.core.streak import record_streak_activity
+from app.core.focus_drills import is_sign_resolved
 
 router = APIRouter(prefix="/scores", tags=["Scoring & Evaluation"])
 
@@ -320,6 +321,24 @@ async def get_student_scores(student_id: str, db: AsyncSession = Depends(get_db)
         relative_stage_map[st_id] = rel_num
         relative_stage_map[f"g_{st_global_num}"] = rel_num
 
+    # Look up passed practice attempts for this student to resolve any Tier 4 struggles
+    passed_practice_res = await db.execute(
+        select(EvaluationAttempt.sign_id, FSLBaseline.sign_name)
+        .outerjoin(FSLBaseline, EvaluationAttempt.sign_id == FSLBaseline.sign_id)
+        .where(
+            EvaluationAttempt.student_id == stud_uuid,
+            EvaluationAttempt.activity_type == "practice",
+            EvaluationAttempt.passed == True
+        )
+    )
+    passed_practice_signs = set()
+    for p_sid, p_sname in passed_practice_res.all():
+        if p_sid:
+            passed_practice_signs.add(p_sid)
+            passed_practice_signs.add(str(p_sid))
+        if p_sname:
+            passed_practice_signs.add(p_sname.strip().lower())
+
     response_items = []
     for a, sign_name, stage_num, stage_title, unit_num, unit_title, sec_num, sec_title in attempts:
         effective_sec = sec_num or 1
@@ -342,6 +361,19 @@ async def get_student_scores(student_id: str, db: AsyncSession = Depends(get_db)
         else:
             assignment_name = f"Section {effective_sec}, Unit {effective_unit}, Stage {rel_stage}"
 
+        effective_tier = a.tier_level
+        is_resolved = False
+        if a.tier_level and a.tier_level >= 4:
+            is_resolved = is_sign_resolved(
+                student_id=str(stud_uuid),
+                stage_id=a.stage_id_new or stage_num or a.stage_id,
+                sign_id=a.sign_id,
+                sign_name=sign_name,
+                passed_practice_signs=passed_practice_signs
+            )
+            if is_resolved:
+                effective_tier = 1
+
         response_items.append({
             "id": str(a.id),
             "activity_type": a.activity_type,
@@ -363,7 +395,9 @@ async def get_student_scores(student_id: str, db: AsyncSession = Depends(get_db)
             "score_location": a.score_location,
             "score_movement": a.score_movement,
             "passed": a.passed,
-            "tier_level": a.tier_level,
+            "tier_level": effective_tier,
+            "raw_tier_level": a.tier_level,
+            "is_resolved": is_resolved,
             "streak": a.streak,
             "xp_earned": a.xp_earned,
             "created_at": str(a.created_at)

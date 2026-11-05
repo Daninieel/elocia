@@ -2,13 +2,11 @@ import { useState, useMemo, Fragment } from "react";
 import TopHeaderBar from "@/components/parent/TopHeaderBar";
 import StudentBanner from "@/components/parent/StudentBanner";
 import ParentStageAnalyticsModal from "@/components/parent/ParentStageAnalyticsModal";
+import { DetailedLearningPath } from "@/components/DetailedLearningPath";
+import { AchievementsModal } from "@/components/AchievementsModal";
+import { computeStudentAchievements } from "@/data/achievementsCatalog";
 import { useParentDashboard } from "@/hooks/useParentDashboard";
 import {
-  Check,
-  Lock,
-  Zap,
-  Award,
-  Medal,
   Trophy,
   Flame,
   ChevronLeft,
@@ -16,6 +14,7 @@ import {
   ChevronDown,
   ChevronUp,
   BarChart2,
+  Sparkles,
 } from "lucide-react";
 
 interface PlaythroughRun {
@@ -54,6 +53,7 @@ export default function ParentHomePage() {
     relativeStageNum?: number;
     attemptNumber?: number;
   } | null>(null);
+  const [isAchievementsOpen, setIsAchievementsOpen] = useState<boolean>(false);
   const itemsPerPage = 5;
 
   const toggleExpandStage = (stageKey: string) => {
@@ -75,7 +75,6 @@ export default function ParentHomePage() {
     setSelectedChild,
     stats,
     stagePath,
-    achievements,
     needsPractice,
     scores,
     sections,
@@ -244,6 +243,28 @@ export default function ParentHomePage() {
     });
   }, [scores, activeSectionIndex]);
 
+  const computedAchievements = useMemo(
+    () => computeStudentAchievements(selectedChild || undefined, scores),
+    [selectedChild, scores]
+  );
+
+  const unlockedAchievementsCount = useMemo(
+    () => computedAchievements.filter((a) => a.unlocked).length,
+    [computedAchievements]
+  );
+
+  const showcaseBadges = useMemo(() => {
+    const unlocked = computedAchievements.filter((a) => a.unlocked);
+    const locked = computedAchievements.filter((a) => !a.unlocked);
+    return [...unlocked, ...locked].slice(0, 4);
+  }, [computedAchievements]);
+
+  const dynamicStageAvgScore = useMemo(() => {
+    if (stageGroupedScores.length === 0) return stats.avgScore;
+    const sum = stageGroupedScores.reduce((acc: number, stage: StageGroupedAssignment) => acc + stage.avgScore, 0);
+    return Math.round((sum / stageGroupedScores.length) * 10) / 10;
+  }, [stageGroupedScores, stats.avgScore]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col">
@@ -273,9 +294,6 @@ export default function ParentHomePage() {
       </div>
     );
   }
-
-  const currentSection = sections[activeSectionIndex];
-  const sectionTitle = currentSection?.title || `Section ${activeSectionIndex + 1}`;
 
   return (
     <div className="min-h-screen bg-gray-50/50 pb-16">
@@ -326,7 +344,7 @@ export default function ParentHomePage() {
             </span>
             <div className="mt-2 text-center">
               <span className="text-4xl font-extrabold text-[#16A34A] tracking-tight">
-                {stats.avgScore}%
+                {dynamicStageAvgScore}%
               </span>
             </div>
             <div className="h-2" />
@@ -416,175 +434,80 @@ export default function ParentHomePage() {
         )}
 
         {/* Lower Row: Learning Path Progress (Left) + Achievements (Right) */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Left Column: Learning Path Progress */}
-          <div className="lg:col-span-8 bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-8">
-              {/* Section selector with Left / Right arrows */}
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setActiveSectionIndex((prev) => Math.max(0, prev - 1))}
-                  disabled={activeSectionIndex === 0}
-                  className="p-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                  title="Previous Section"
-                >
-                  <ChevronLeft className="size-4" />
-                </button>
-                <span className="text-xs font-bold tracking-widest text-[#FF8A00] uppercase">
-                  {sectionTitle}
-                </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setActiveSectionIndex((prev) =>
-                      Math.min(sections.length - 1, prev + 1)
-                    )
-                  }
-                  disabled={activeSectionIndex >= sections.length - 1}
-                  className="p-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
-                  title="Next Section"
-                >
-                  <ChevronRight className="size-4" />
-                </button>
-              </div>
-
-              <span className="text-sm font-semibold text-gray-600">
-                Learning Path Progress
-              </span>
-            </div>
-
-            {/* Stages Flow */}
-            <div className="flex items-center justify-between px-2 sm:px-4 py-6 overflow-x-auto min-w-full">
-              {stagePath.map((stage, idx) => {
-                const targetStageId = stage.stageId || stage.stageNumber;
-                return (
-                  <div key={stage.stageNumber} className="flex items-center flex-1 min-w-[100px] last:flex-none">
-                    {/* Stage Card - Clickable to open mini window */}
-                    <div className="flex flex-col items-center">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedStageForAnalytics({
-                            stageId: targetStageId,
-                            title: `Stage ${stage.stageNumber}${stage.subtitle ? ` - ${stage.subtitle}` : ""}`,
-                            relativeStageNum: stage.stageNumber,
-                          });
-                        }}
-                        className={`flex flex-col items-center justify-center w-24 h-32 rounded-2xl transition-all shadow-sm cursor-pointer hover:scale-105 active:scale-95 focus:outline-none ${
-                          stage.status === "completed"
-                            ? "bg-[#E6F9EE] border border-[#A7F3D0] text-[#059669] hover:border-[#059669]"
-                            : stage.status === "current"
-                            ? "bg-white border-2 border-[#FF8A00] text-gray-800 shadow-md hover:shadow-lg"
-                            : "bg-white border border-gray-200 text-gray-400 hover:border-gray-300"
-                        }`}
-                        title="Click to view round details and performance"
-                      >
-                        <span className="text-[11px] font-bold tracking-wider uppercase opacity-80">
-                          Stage
-                        </span>
-                        <span
-                          className={`text-2xl font-extrabold my-1 ${
-                            stage.status === "completed"
-                              ? "text-[#059669]"
-                              : stage.status === "current"
-                              ? "text-[#FF8A00]"
-                              : "text-gray-400"
-                          }`}
-                        >
-                          {stage.stageNumber}
-                        </span>
-
-                        {/* Status Icon or Mini Progress */}
-                        {stage.status === "completed" ? (
-                          <div className="size-6 rounded-full bg-[#10B981] text-white flex items-center justify-center shadow-xs mt-1">
-                            <Check className="size-4 stroke-[3]" />
-                          </div>
-                        ) : stage.status === "current" ? (
-                          <div className="w-12 h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden">
-                            <div
-                              className="h-full bg-[#FF8A00] rounded-full"
-                              style={{ width: `${stage.progressPercentage ?? 50}%` }}
-                            />
-                          </div>
-                        ) : (
-                          <div className="size-6 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 mt-1">
-                            <Lock className="size-3.5" />
-                          </div>
-                        )}
-                      </button>
-                      {/* Subtitle below stage card e.g. Numbers (0-10) */}
-                      <span className="text-[11px] font-semibold text-gray-500 mt-2 text-center max-w-[96px] leading-tight">
-                        {stage.subtitle || `Stage ${stage.stageNumber}`}
-                      </span>
-                    </div>
-
-                    {/* Connector line between stages */}
-                    {idx < stagePath.length - 1 && (
-                      <div
-                        className={`h-1 flex-1 mx-2 -mt-6 rounded-full ${
-                          stage.status === "completed" ? "bg-[#10B981]" : "bg-gray-200"
-                        }`}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-            <div className="h-2" />
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch">
+          {/* Left Column: Learning Path Progress Tracking */}
+          <div className="lg:col-span-8 flex flex-col">
+            <DetailedLearningPath
+              className="h-full flex-1"
+              sections={sections}
+              activeSectionIndex={activeSectionIndex}
+              onSectionChange={(idx) => setActiveSectionIndex(idx)}
+              stages={stagePath}
+              completedStagesCount={stats.unitsCompleted}
+              onSelectStage={(stageId, stageTitle, stageNumber) => {
+                setSelectedStageForAnalytics({
+                  stageId,
+                  title: stageTitle,
+                  relativeStageNum: stageNumber,
+                });
+              }}
+            />
           </div>
 
-          {/* Right Column: Achievements Grid Matching Figma */}
-          <div className="lg:col-span-4 bg-white rounded-2xl p-6 border border-gray-100 shadow-sm flex flex-col justify-between">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-base font-bold text-gray-700">Achievements</h2>
+          {/* Right Column: Achievements Hub */}
+          <div className="lg:col-span-4 bg-white rounded-3xl p-6 border-3 border-(--border) shadow-[0_6px_0_0_#BDC8D2] flex flex-col justify-between h-full">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <h2 className="heading-3 text-(--primary) flex items-center gap-1.5">
+                  <Trophy className="size-5 text-amber-500" />
+                  Achievements
+                </h2>
+                <span className="text-xs font-bold text-emerald-600 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200 inline-block mt-1">
+                  {unlockedAchievementsCount} of {computedAchievements.length} Badges Unlocked
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAchievementsOpen(true)}
+                className="text-xs font-bold text-orange-600 hover:text-orange-700 hover:underline flex items-center gap-0.5 cursor-pointer"
+              >
+                View All &rarr;
+              </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 py-2">
-              {achievements.map((badge) => {
-                const getBadgeIcon = () => {
-                  switch (badge.iconType) {
-                    case "lightning":
-                      return <Zap className="size-5" />;
-                    case "snake":
-                      return <Award className="size-5" />;
-                    case "medal":
-                      return <Medal className="size-5" />;
-                    case "trophy":
-                      return <Trophy className="size-5" />;
-                    default:
-                      return <Award className="size-5" />;
-                  }
-                };
-
-                return (
-                  <div
-                    key={badge.id}
-                    className="flex flex-col items-center justify-center text-center p-3 rounded-xl hover:bg-gray-50/80 transition-colors"
-                  >
-                    <div
-                      className={`size-14 rounded-full flex items-center justify-center shadow-xs mb-2 ${
-                        badge.unlocked && badge.color === "orange"
-                          ? "bg-orange-100 text-[#FF8A00]"
-                          : badge.unlocked && badge.color === "green"
-                          ? "bg-green-100 text-[#10B981]"
-                          : "bg-gray-100 text-gray-400 opacity-60"
-                      }`}
-                    >
-                      {getBadgeIcon()}
-                    </div>
-                    <span
-                      className={`text-xs font-semibold leading-tight ${
-                        badge.unlocked ? "text-gray-700" : "text-gray-400"
-                      }`}
-                    >
-                      {badge.name}
-                    </span>
-                  </div>
-                );
-              })}
+            {/* Quick 4 Badges Showcase */}
+            <div className="grid grid-cols-2 gap-3 py-2 flex-1 items-stretch">
+              {showcaseBadges.map((badge) => (
+                <div
+                  key={badge.id}
+                  onClick={() => setIsAchievementsOpen(true)}
+                  className={`flex flex-col items-center justify-center p-2.5 rounded-2xl border text-center transition-all cursor-pointer hover:scale-105 active:scale-95 ${
+                    badge.unlocked
+                      ? "bg-amber-50/70 border-amber-300 text-amber-900 shadow-xs"
+                      : "bg-gray-50 border-gray-200 text-gray-400 opacity-60"
+                  }`}
+                  title={`${badge.title}: ${badge.description}`}
+                >
+                  <span className={`text-2xl mb-1 select-none transition-transform ${badge.unlocked ? "" : "grayscale opacity-50"}`}>
+                    {badge.icon}
+                  </span>
+                  <span className="text-xs font-bold mt-0.5 line-clamp-1">{badge.title}</span>
+                  <span className={`text-[10px] font-extrabold ${badge.unlocked ? "text-emerald-700" : "text-gray-400"}`}>
+                    {badge.unlocked ? "Unlocked" : "In Progress"}
+                  </span>
+                </div>
+              ))}
             </div>
-            <div className="h-1" />
+
+            {/* View All Button */}
+            <button
+              type="button"
+              onClick={() => setIsAchievementsOpen(true)}
+              className="w-full py-2.5 px-4 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer mt-2"
+            >
+              <Sparkles className="size-4" />
+              View All 20 Achievements
+            </button>
           </div>
         </div>
 
@@ -869,6 +792,22 @@ export default function ParentHomePage() {
           attemptNumber={selectedStageForAnalytics.attemptNumber}
           isOpen={true}
           onClose={() => setSelectedStageForAnalytics(null)}
+        />
+      )}
+
+      {/* All Achievements Modal */}
+      {selectedChild && (
+        <AchievementsModal
+          isOpen={isAchievementsOpen}
+          onClose={() => setIsAchievementsOpen(false)}
+          studentName={selectedChild.name}
+          gradeLevel={selectedChild.grade_level}
+          level={selectedChild.level}
+          avgScore={stats.avgScore}
+          signsMastered={stats.unitsCompleted > 0 ? ((selectedChild as any).signs_mastered || 13) : 0}
+          stagesComplete={stats.unitsCompleted}
+          streak={stats.streak}
+          achievements={computedAchievements}
         />
       )}
     </div>

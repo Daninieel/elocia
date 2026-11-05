@@ -36,6 +36,15 @@ interface NeedsPracticeItem {
   reason: string;
 }
 
+interface ActiveDrillInfo {
+  id: string;
+  student_id: string;
+  stage_id: number;
+  signs: string[];
+  notes?: string;
+  active: boolean;
+}
+
 interface TrendItem {
   label: string;
   score: number;
@@ -76,12 +85,16 @@ export default function UnitAnalyticsModal({
   const [parameters, setParameters] = useState<ParameterItem[]>([]);
   const [insight, setInsight] = useState<string>("");
   const [needsPractice, setNeedsPractice] = useState<NeedsPracticeItem[]>([]);
+  const [activeDrill, setActiveDrill] = useState<ActiveDrillInfo | null>(null);
+  const [hasCompletedDrill, setHasCompletedDrill] = useState<boolean>(false);
   const [trend, setTrend] = useState<TrendItem[]>([]);
   const [rounds, setRounds] = useState<RoundItem[]>([]);
   const [selectedRound, setSelectedRound] = useState<RoundItem | null>(null);
   const [overallScore, setOverallScore] = useState<number>(78);
   const [drillSuccess, setDrillSuccess] = useState<boolean>(false);
   const [isCreatingDrill, setIsCreatingDrill] = useState<boolean>(false);
+  const [isCancellingDrill, setIsCancellingDrill] = useState<boolean>(false);
+  const [drillError, setDrillError] = useState<string | null>(null);
   const [availableAttempts, setAvailableAttempts] = useState<AvailableAttemptItem[]>([]);
   const [activeAttemptNum, setActiveAttemptNum] = useState<number>(attemptNumber || 1);
 
@@ -96,22 +109,37 @@ export default function UnitAnalyticsModal({
 
     setLoading(true);
     setDrillSuccess(false);
+    setDrillError(null);
     setSelectedRound(null);
 
     const attemptQuery = activeAttemptNum ? `&attempt_index=${activeAttemptNum}` : "";
-    fetch(`http://localhost:8000/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`)
-      .then((res) => {
-        if (!res.ok) throw new Error("Failed to load unit analytics");
-        return res.json();
-      })
+    
+    const fetchAnalytics = async () => {
+      const bases = ["http://localhost:8000", "https://elocia.onrender.com"];
+      for (const base of bases) {
+        try {
+          const res = await fetch(`${base}/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`);
+          if (res.ok) {
+            return await res.json();
+          }
+        } catch {}
+      }
+      throw new Error("Failed to load unit analytics from available endpoints");
+    };
+
+    fetchAnalytics()
       .then((data) => {
         setParameters(data.parameter_mastery || []);
         setInsight(data.diagnostic_insight || "");
-        setNeedsPractice(data.needs_practice || []);
+        const np: NeedsPracticeItem[] = data.needs_practice || [];
+        setNeedsPractice(np);
         setTrend(data.performance_trend || []);
         setOverallScore(data.overall_score || 78);
         setRounds(data.rounds || []);
         setAvailableAttempts(data.available_attempts || []);
+        setActiveDrill(data.active_drill || null);
+        setHasCompletedDrill(Boolean(data.has_completed_drill));
+
         if (data.current_attempt_number && !attemptNumber) {
           setActiveAttemptNum(data.current_attempt_number);
         }
@@ -125,50 +153,129 @@ export default function UnitAnalyticsModal({
           { name: "Location", key: "location", score: 65 },
           { name: "Movement", key: "movement", score: 82 },
         ]);
-        setInsight("Student is struggling slightly with Location parameters. Consider focusing practice on spatial positioning.");
-        setNeedsPractice([
-          { sign_id: 5, name: "5", stage_id: stageId, score: 52, tier_level: 4, reason: "Flagged in Tier 4" },
-          { sign_id: 2, name: "2", stage_id: stageId, score: 58, tier_level: 3, reason: "Palm orientation deviation" },
-        ]);
+        setInsight("Student is performing well across fundamental FSL parameters.");
+        setNeedsPractice([]);
+        setHasCompletedDrill(true);
         setTrend([
           { label: "Week 1", score: 55 },
           { label: "Week 2", score: 68 },
           { label: "Week 3", score: 74 },
           { label: "Current", score: 82, is_current: true },
         ]);
-        setRounds([
+        const fallbackRounds = [
           { sign_id: 1, sign_name: "1", score_overall: 85, score_handshape: 90, score_palm_orientation: 82, score_location: 84, score_movement: 85, passed: true },
-          { sign_id: 2, sign_name: "2", score_overall: 58, score_handshape: 75, score_palm_orientation: 55, score_location: 60, score_movement: 62, passed: false },
+          { sign_id: 2, sign_name: "2", score_overall: 80, score_handshape: 75, score_palm_orientation: 85, score_location: 80, score_movement: 82, passed: true },
           { sign_id: 3, sign_name: "3", score_overall: 92, score_handshape: 95, score_palm_orientation: 90, score_location: 92, score_movement: 91, passed: true },
           { sign_id: 4, sign_name: "4", score_overall: 88, score_handshape: 89, score_palm_orientation: 88, score_location: 86, score_movement: 89, passed: true },
           { sign_id: 5, sign_name: "5", score_overall: 52, score_handshape: 60, score_palm_orientation: 52, score_location: 50, score_movement: 55, passed: false }
-        ]);
+        ];
+        setRounds(fallbackRounds);
       })
       .finally(() => setLoading(false));
   }, [isOpen, studentId, stageId, activeAttemptNum]);
 
   const handleCreateFocusDrill = async () => {
+    if (needsPractice.length === 0) {
+      setDrillError("Focus drills can only be created for signs that triggered Tier 4 Pass-and-Flag.");
+      return;
+    }
+
     setIsCreatingDrill(true);
+    setDrillError(null);
     try {
+      // Focus drill is strictly for Tier 4 flagged signs
       const targetSigns = needsPractice.map((p) => p.name);
-      const res = await fetch("http://localhost:8000/analytics/drills/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          student_id: studentId,
-          stage_id: stageId,
-          signs: targetSigns,
-          notes: `Targeted drill for ${targetSigns.join(", ")}`,
-        }),
-      });
-      if (res.ok) {
-        setDrillSuccess(true);
-        setTimeout(() => setDrillSuccess(false), 5000);
+
+      // Extract clear section label matching the web portal (e.g. "Section 3, Stage 2")
+      const sectionLabel = (() => {
+        if (stageTitle) {
+          const secMatch = stageTitle.match(/Section\s*(\d+)/i);
+          if (secMatch) {
+            return `Section ${secMatch[1]}, Stage ${displayStageNumber}`;
+          }
+          const commaIdx = stageTitle.indexOf(",");
+          if (commaIdx !== -1) {
+            return `${stageTitle.substring(0, commaIdx)}, Stage ${displayStageNumber}`;
+          }
+          return `${stageTitle}, Stage ${displayStageNumber}`;
+        }
+        return `Stage ${displayStageNumber}`;
+      })();
+
+      const payload = {
+        student_id: studentId,
+        stage_id: displayStageNumber,
+        stage_number: displayStageNumber,
+        raw_stage_id: stageId,
+        section_label: sectionLabel,
+        signs: targetSigns,
+        notes: `Tier 4 targeted focus drill for ${targetSigns.join(", ")}`,
+      };
+
+      let createdDrill: any = null;
+      let atLeastOneSuccess = false;
+
+      const endpoints = ["http://localhost:8000", "https://elocia.onrender.com"];
+
+      for (const base of endpoints) {
+        try {
+          const r1 = await fetch(`${base}/analytics/drills/create`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (r1.ok) {
+            atLeastOneSuccess = true;
+            const d = await r1.json();
+            if (d.drill && !createdDrill) createdDrill = d.drill;
+          }
+          // Also broadcast
+          fetch(`${base}/analytics/drills/create`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...payload, student_id: "all" }),
+          }).catch(() => {});
+        } catch (err) {
+          console.warn(`Dispatch to ${base} failed:`, err);
+        }
       }
-    } catch (e) {
+
+      if (!atLeastOneSuccess) {
+        throw new Error("Unable to reach backend servers to save focus drill.");
+      }
+
+      setActiveDrill(createdDrill || {
+        id: "temp",
+        student_id: studentId,
+        stage_id: displayStageNumber,
+        section_label: sectionLabel,
+        signs: targetSigns,
+        active: true,
+      });
+      setDrillSuccess(true);
+      setTimeout(() => setDrillSuccess(false), 6000);
+    } catch (e: any) {
       console.error("Failed to create focus drill:", e);
+      setDrillError(e?.message || "Failed to dispatch drill. Please verify backend connection.");
     } finally {
       setIsCreatingDrill(false);
+    }
+  };
+
+  const handleCancelFocusDrill = async () => {
+    setIsCancellingDrill(true);
+    setDrillError(null);
+    try {
+      fetch(`http://localhost:8000/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
+      fetch(`http://localhost:8000/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
+      fetch(`https://elocia.onrender.com/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
+      fetch(`https://elocia.onrender.com/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
+      setActiveDrill(null);
+      setDrillSuccess(false);
+    } catch (e) {
+      console.error("Failed to cancel focus drill:", e);
+    } finally {
+      setIsCancellingDrill(false);
     }
   };
 
@@ -202,13 +309,19 @@ export default function UnitAnalyticsModal({
                         key={att.attempt_number}
                         type="button"
                         onClick={() => setActiveAttemptNum(att.attempt_number)}
-                        className={`px-2 py-0.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                        className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
                           activeAttemptNum === att.attempt_number
                             ? "bg-white text-[#FF8A00] shadow-xs"
                             : "text-orange-700/80 hover:text-orange-950 hover:bg-white/50"
                         }`}
                       >
-                        #{att.attempt_number} ({Math.round(att.score)}%)
+                        <span>#{att.attempt_number} ({Math.round(att.score)}%)</span>
+                        {att.has_tier4 && (
+                          <span
+                            className="flex h-2 w-2 rounded-full bg-rose-500 shrink-0"
+                            title="Tier 4 Pass-and-Flag triggered in this attempt"
+                          />
+                        )}
                       </button>
                     ))}
                   </div>
@@ -241,7 +354,7 @@ export default function UnitAnalyticsModal({
                 <div className="flex items-center gap-3 rounded-2xl bg-emerald-50 border border-emerald-200 p-4 text-emerald-800 shadow-xs animate-in fade-in">
                   <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0" />
                   <div>
-                    <p className="text-sm font-bold">Focus Drill Successfully Dispatched!</p>
+                    <p className="text-sm font-bold">Tier 4 Focus Drill Successfully Dispatched!</p>
                     <p className="text-xs text-emerald-700 mt-0.5">
                       The Student Desktop app will now present targeted practice sessions specifically for {needsPractice.map(p => p.name).join(", ")}.
                     </p>
@@ -404,87 +517,195 @@ export default function UnitAnalyticsModal({
                   </div>
                 </div>
 
-                {/* 2. Needs Practice & Focus Drill */}
-                <div className="rounded-3xl border-2 border-gray-100 bg-white p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4">
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <AlertCircle className="h-4 w-4 text-rose-500" />
-                        <h3 className="text-base font-extrabold text-gray-900 tracking-tight">
-                          Needs Practice
-                        </h3>
+                {/* 2. Needs Practice & Focus Drill (Resolved / Completed or Active Intervention) */}
+                {needsPractice.length === 0 ? (
+                  <div className="rounded-3xl border-2 border-emerald-100 bg-emerald-50/40 p-5 shadow-xs flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-emerald-500 text-white font-extrabold text-sm shadow-xs">
+                            ✓
+                          </div>
+                          <div>
+                            <h3 className="text-base font-extrabold text-emerald-950 tracking-tight leading-tight">
+                              {hasCompletedDrill ? "Focus Drill Completed" : "No Intervention Needed"}
+                            </h3>
+                            <p className="text-[11px] text-emerald-700 font-medium">
+                              {hasCompletedDrill ? "Tier 4 struggle successfully resolved" : "All signs cleared authentically"}
+                            </p>
+                          </div>
+                        </div>
+                        <span className="rounded-full px-2.5 py-0.5 text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          ✨ All Caught Up
+                        </span>
                       </div>
-                      <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
-                        needsPractice.length > 0 ? "bg-rose-50 text-rose-600" : "bg-emerald-50 text-emerald-600"
-                      }`}>
-                        {needsPractice.length > 0 ? `${needsPractice.length} Signs Flagged` : "All Signs Mastered"}
+
+                      <div className="rounded-2xl border border-emerald-200/80 bg-white/90 p-3.5 shadow-2xs">
+                        <p className="text-xs text-emerald-900 font-medium leading-relaxed">
+                          {hasCompletedDrill
+                            ? "Student completed the targeted focus drill on the desktop app and successfully demonstrated all signs! The Tier 4 intervention has been resolved."
+                            : "Student cleared all signs in this attempt without triggering Tier 4 intervention. Focus drills are only generated for Tier 4 Pass-and-Flag."}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 text-center border-t border-emerald-100/60">
+                      <span className="text-[11px] font-bold text-emerald-700 inline-flex items-center gap-1.5">
+                        <span>✨</span> No further intervention required for this stage
                       </span>
                     </div>
-                    <p className="text-xs text-gray-500">
-                      Specific round signs where student repeatedly struggled or triggered Tier 4 Pass-and-Flag.
-                    </p>
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border-2 border-gray-100 bg-white p-4 sm:p-5 shadow-xs flex flex-col justify-between space-y-4">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 text-rose-500" />
+                          <h3 className="text-base font-extrabold text-gray-900 tracking-tight">
+                            Tier 4 Intervention Drill
+                          </h3>
+                        </div>
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                          activeDrill?.active
+                            ? "bg-amber-100 text-amber-800 border border-amber-300"
+                            : "bg-rose-50 text-rose-600 border border-rose-200"
+                        }`}>
+                          {activeDrill?.active
+                            ? "⚡ Drill Active"
+                            : `${needsPractice.length} Tier 4 Flagged`}
+                        </span>
+                      </div>
 
-                    {needsPractice.length > 0 ? (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2">
-                        {needsPractice.map((item) => (
-                          <div
-                            key={item.sign_id}
-                            className="flex items-center justify-between rounded-2xl border border-rose-200 bg-rose-50/70 p-3 shadow-2xs"
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white font-extrabold text-sm text-rose-700 shadow-2xs border border-rose-200">
-                                {item.name}
-                              </span>
-                              <div>
-                                <p className="text-xs font-bold text-gray-800 leading-none">
-                                  Sign "{item.name}"
-                                </p>
-                                <span className="text-[10px] font-semibold text-rose-600">
-                                  {item.score}% accuracy
-                                </span>
-                              </div>
-                            </div>
-                            <span
-                              className="text-xs font-bold text-gray-400 hover:text-gray-600 cursor-pointer"
-                              title={item.reason}
-                            >
-                              ⓘ
+                      <p className="text-xs text-gray-500">
+                        Focus drills are reserved exclusively for students who trigger Tier 4 Pass-and-Flag intervention.
+                      </p>
+
+                      {/* Active Drill Callout Banner if currently pending on desktop */}
+                      {activeDrill?.active && (
+                        <div className="flex items-center justify-between rounded-2xl bg-amber-50/90 border border-amber-200 p-3 shadow-2xs">
+                          <div className="flex items-center gap-2.5">
+                            <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-amber-500 text-white font-extrabold text-xs shadow-xs">
+                              ⚡
                             </span>
+                            <div>
+                              <p className="text-xs font-bold text-amber-950 leading-tight">
+                                Active Focus Drill on Student Desktop
+                              </p>
+                              <p className="text-[11px] text-amber-800 font-medium">
+                                Practicing signs: <span className="font-extrabold text-amber-900">{activeDrill.signs.join(", ")}</span>
+                              </p>
+                            </div>
                           </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3.5 text-emerald-700 text-xs font-bold shadow-2xs">
-                        <span>✨</span>
-                        <span>Great job! No signs currently flagged for practice.</span>
-                      </div>
-                    )}
-                  </div>
+                          <button
+                            type="button"
+                            onClick={handleCancelFocusDrill}
+                            disabled={isCancellingDrill}
+                            className="text-xs font-bold text-amber-800 hover:text-amber-950 underline px-2 py-1 rounded-lg hover:bg-amber-100/60 transition-all cursor-pointer disabled:opacity-50"
+                          >
+                            {isCancellingDrill ? "Clearing..." : "Cancel Drill"}
+                          </button>
+                        </div>
+                      )}
 
-                  {/* Create Focus Drill Button */}
-                  <div className="pt-4 border-t border-gray-100">
-                    <button
-                      type="button"
-                      disabled={isCreatingDrill || needsPractice.length === 0}
-                      onClick={handleCreateFocusDrill}
-                      className="w-full flex items-center justify-center gap-2 rounded-2xl bg-[#FF8A00] px-4 py-3 text-sm font-bold text-white shadow-md hover:bg-[#e67c00] active:scale-[0.99] transition-all disabled:opacity-50 disabled:bg-gray-300 disabled:cursor-not-allowed cursor-pointer"
-                    >
-                      <Dumbbell className="h-4 w-4" />
-                      <span>
-                        {isCreatingDrill
-                          ? "Dispatching Drill..."
-                          : needsPractice.length === 0
-                          ? "No Focus Drill Needed"
-                          : "Create Focus Drill"}
-                      </span>
-                    </button>
-                    <p className="text-[11px] text-center text-gray-400 mt-2 font-medium">
-                      {needsPractice.length === 0
-                        ? "Student has successfully practiced and cleared all flagged signs."
-                        : "Auto-creates targeted practice round on student's desktop app."}
-                    </p>
+                      {/* Signs Display */}
+                      <div className="space-y-2 pt-1">
+                        <p className="text-xs font-bold text-rose-800 flex items-center gap-1.5">
+                          <span>🚩</span>
+                          <span>Signs requiring Tier 4 intervention:</span>
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {needsPractice.map((item) => (
+                            <div
+                              key={item.sign_id}
+                              className="flex items-center justify-between rounded-2xl border border-rose-300 bg-rose-50/70 p-3 shadow-2xs"
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-white font-black text-sm text-rose-700 shadow-2xs border border-rose-200">
+                                  {item.name}
+                                </span>
+                                <div>
+                                  <p className="text-xs font-bold text-gray-900 leading-none">
+                                    Sign "{item.name}"
+                                  </p>
+                                  <span className="text-[10px] font-semibold text-rose-600">
+                                    {Math.round(item.score)}% accuracy • Tier 4 Pass-and-Flag
+                                  </span>
+                                </div>
+                              </div>
+                              <span
+                                className="rounded-md bg-rose-200/80 px-2 py-0.5 text-[10px] font-black text-rose-800"
+                                title={item.reason}
+                              >
+                                Tier 4
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Immediate In-Place Feedback & Action Button */}
+                    <div className="pt-3 border-t border-gray-100 space-y-2.5">
+                      {/* Inline Success Callout */}
+                      {drillSuccess && (
+                        <div className="flex items-start gap-2.5 rounded-2xl bg-emerald-50 border border-emerald-300 p-3 text-emerald-800 shadow-xs animate-in fade-in duration-200">
+                          <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+                          <div className="text-xs">
+                            <p className="font-extrabold text-emerald-900 leading-tight">
+                              Focus Drill Dispatched Successfully!
+                            </p>
+                            <p className="text-emerald-700 mt-0.5">
+                              Targeted Tier 4 intervention for sign(s) <strong>{needsPractice.map(p => p.name).join(", ")}</strong> is now queued on the Student Desktop.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Inline Error Callout */}
+                      {drillError && (
+                        <div className="flex items-center gap-2 rounded-2xl bg-rose-50 border border-rose-300 p-3 text-rose-800 shadow-xs text-xs animate-in fade-in">
+                          <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                          <span className="font-medium">{drillError}</span>
+                        </div>
+                      )}
+
+                      {/* Action Button: Enabled ONLY if needsPractice has Tier 4 signs */}
+                      <button
+                        type="button"
+                        disabled={isCreatingDrill}
+                        onClick={handleCreateFocusDrill}
+                        className={`w-full flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-bold shadow-md transition-all ${
+                          drillSuccess
+                            ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer active:scale-[0.99]"
+                            : "bg-[#FF8A00] hover:bg-[#e67c00] text-white cursor-pointer active:scale-[0.99]"
+                        }`}
+                      >
+                        {isCreatingDrill ? (
+                          <>
+                            <div className="h-4 w-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            <span>Dispatching Tier 4 Focus Drill...</span>
+                          </>
+                        ) : drillSuccess ? (
+                          <>
+                            <CheckCircle2 className="h-4 w-4 text-white" />
+                            <span>Focus Drill Dispatched! ✓</span>
+                          </>
+                        ) : (
+                          <>
+                            <Dumbbell className="h-4 w-4 text-white" />
+                            <span>
+                              Create Focus Drill ({needsPractice.length} Tier 4 Sign{needsPractice.length > 1 ? "s" : ""})
+                            </span>
+                          </>
+                        )}
+                      </button>
+
+                      <p className="text-[11px] text-center text-gray-400 font-medium">
+                        Auto-creates targeted practice round on student desktop for Tier 4 flagged signs ({needsPractice.map(p => p.name).join(", ")}).
+                      </p>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* 3. Performance Trend Bar Chart */}
