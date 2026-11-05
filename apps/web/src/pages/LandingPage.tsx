@@ -39,12 +39,6 @@ export default function LandingPage() {
         </div>
       </div>
 
-      {/* Bottom */}
-      <div className="pb-6 sm:pb-12 text-center text-xs sm:text-sm">
-        <Link to="/help" className="text-(--info) hover:underline font-medium">
-          Need help?
-        </Link>
-      </div>
     </main>
   );
 }
