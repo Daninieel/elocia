@@ -68,7 +68,7 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
-        'tkinter', 'matplotlib', 'IPython', 'notebook', 'torch', 'tensorboard',
+        'tkinter', 'IPython', 'notebook', 'torch', 'tensorboard',
         'jax', 'jaxlib', 'keras', 'tensorflow', 'dlib', 'face_recognition',
         'nbconvert', 'nbformat', 'jupyter'
     ],

@@ -162,6 +162,7 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
   const [currentTier, setCurrentTier] = useState<1 | 2 | 3 | 4>(1);
   const [failCount, setFailCount] = useState<number>(0);
   const [scores, setScores] = useState<ScoreSet>(failScores); // Start with failing so UI isn't passed
+  const latestScoresRef = useRef<ScoreSet>(failScores);
   const [hasEvaluated, setHasEvaluated] = useState<boolean>(false);
   const [isEvaluating, setIsEvaluating] = useState<boolean>(false);
   const isEvaluatingRef = useRef<boolean>(false);
@@ -205,7 +206,12 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
   useEffect(() => {
     currentItemRef.current = currentItem;
     if (diagOn && wsRef.current?.readyState === WebSocket.OPEN && currentItem?.globalId) {
-      wsRef.current.send(JSON.stringify({ action: 'start_diagnostic', stageId: currentItem.globalId }));
+      wsRef.current.send(JSON.stringify({
+        action: 'start_diagnostic',
+        stageId: currentItem.globalId,
+        stageName: currentItem.name,
+        activityType: isPracticeModeRef.current ? 'practice' : 'evaluation'
+      }));
     }
   }, [currentItem, diagOn]);
 
@@ -310,6 +316,7 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
         if (data.action === 'result') {
           setErrorMessage(null);
           setScores(data.scores);
+          latestScoresRef.current = data.scores;
           setHasEvaluated(true);
           setIsEvaluating(false);
 
@@ -442,18 +449,32 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
           if (data.action === 'landmarks') {
             landmarksRef.current = data;
             // Direct DOM update eliminates full-component React re-renders on every frame (30 FPS smooth!)
-            if (diagFramesRef.current) diagFramesRef.current.textContent = String(data.frames);
+            if (diagFramesRef.current) diagFramesRef.current.textContent = String(data.frames ?? 0);
             if (diagHandRef.current) {
-              diagHandRef.current.textContent = String(data.scores.handshape);
-              diagHandRef.current.className = `diag-stat-value ${data.scores.handshape >= 60 ? 'diag-good' : 'diag-bad'}`;
+              diagHandRef.current.textContent = String(data.scores?.handshape ?? 0);
+              diagHandRef.current.className = `diag-stat-value ${(data.scores?.handshape ?? 0) >= 60 ? 'diag-good' : 'diag-bad'}`;
             }
             if (diagPalmRef.current) {
-              diagPalmRef.current.textContent = String(data.scores.palmOrientation);
-              diagPalmRef.current.className = `diag-stat-value ${data.scores.palmOrientation >= 60 ? 'diag-good' : 'diag-bad'}`;
+              diagPalmRef.current.textContent = String(data.scores?.palmOrientation ?? 0);
+              diagPalmRef.current.className = `diag-stat-value ${(data.scores?.palmOrientation ?? 0) >= 60 ? 'diag-good' : 'diag-bad'}`;
             }
             if (diagLocRef.current) {
-              diagLocRef.current.textContent = String(data.scores.location);
-              diagLocRef.current.className = `diag-stat-value ${data.scores.location >= 60 ? 'diag-good' : 'diag-bad'}`;
+              diagLocRef.current.textContent = String(data.scores?.location ?? 0);
+              diagLocRef.current.className = `diag-stat-value ${(data.scores?.location ?? 0) >= 60 ? 'diag-good' : 'diag-bad'}`;
+            }
+          } else if (data.action === 'hand_status') {
+            if (data.frames !== undefined && diagFramesRef.current) {
+              diagFramesRef.current.textContent = String(data.frames);
+            }
+            if (data.pose && data.hand) {
+              landmarksRef.current = {
+                hand: data.hand,
+                right_hand: data.right_hand,
+                left_hand: data.left_hand,
+                pose: data.pose,
+                scores: { handshape: 0, palmOrientation: 0, location: 0, movement: 0 },
+                frames: data.frames ?? 0
+              };
             }
           }
           // Update wrist trail
@@ -742,7 +763,12 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
     setDiagOn(next);
     if (next) {
       trailRef.current = [];
-      wsRef.current?.send(JSON.stringify({ action: 'start_diagnostic', stageId: currentItem.globalId }));
+      wsRef.current?.send(JSON.stringify({
+        action: 'start_diagnostic',
+        stageId: currentItem.globalId,
+        stageName: currentItem.name,
+        activityType: isPracticeModeRef.current ? 'practice' : 'evaluation'
+      }));
     } else {
       wsRef.current?.send(JSON.stringify({ action: 'stop_diagnostic' }));
       setDiagData(null);
@@ -785,6 +811,16 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
     const signName = currentItemRef.current?.name;
     const signGlobalId = currentItemRef.current?.globalId ?? 1;
 
+    // Use authentic raw AI scores from latest evaluation attempt (no artificial 60% clamping)
+    const currentScores = latestScoresRef.current || scores;
+    const rawHandshape = Math.round(currentScores.handshape ?? 0);
+    const rawPalm = Math.round(currentScores.palmOrientation ?? 0);
+    const rawLocation = Math.round(currentScores.location ?? 0);
+    const rawMovement = Math.round(currentScores.movement ?? 0);
+    const rawOverall = Math.round(
+      ((rawHandshape + rawPalm + rawLocation + rawMovement) / 4) * 100
+    ) / 100;
+
     saveScore({
       student_id: student.id,
       activity_type: isPracticeModeRef.current ? 'practice' : 'evaluation',
@@ -792,11 +828,11 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
       sign_id: signGlobalId,
       attempt_number: Math.max(failCountRef.current, 4),
       tier_level: 4,
-      score_handshape: Math.max(scores.handshape, 60),
-      score_palm_orientation: Math.max(scores.palmOrientation, 60),
-      score_location: Math.max(scores.location, 60),
-      score_movement: Math.max(scores.movement, 60),
-      score_overall: Math.max(scores.handshape, scores.palmOrientation, scores.location, scores.movement, 60),
+      score_handshape: rawHandshape,
+      score_palm_orientation: rawPalm,
+      score_location: rawLocation,
+      score_movement: rawMovement,
+      score_overall: rawOverall,
       passed: true,
       xp_earned: isPracticeModeRef.current ? 0 : 25, // Award partial XP for Tier 4 compassionate pass
     });
@@ -1159,7 +1195,10 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
                   className="eval-visual-aid-img"
                   onError={(e) => {
                     const target = e.target as HTMLImageElement;
-                    if (!target.dataset.triedName) {
+                    if (!target.dataset.triedLocalId) {
+                      target.dataset.triedLocalId = 'true';
+                      target.src = `/thumbnails/${currentItem.globalId}.png`;
+                    } else if (!target.dataset.triedName) {
                       target.dataset.triedName = 'true';
                       target.src = `/thumbnails/${currentItem.name}.png`;
                     } else if (!target.dataset.triedThumbId) {

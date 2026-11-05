@@ -21,6 +21,7 @@ interface StageGroupedAssignment {
   relativeStageNum: number;
   stageId: number;
   title: string;
+  signNames?: string[];
   signCount: number;
   avgScore: number;
   latestDate: string;
@@ -62,30 +63,33 @@ export default function ParentHomePage() {
       relativeStageNum: number;
       stageId: number;
       title: string;
-      signMap: Map<string, { score: number; date: string }>;
+      signMap: Map<string, { score: number; date: string; name: string }>;
+      allScores: number[];
       dates: string[];
       hasFlag: boolean;
     }>();
 
     scores.forEach((s) => {
-      const stageNum = s.stage_number || s.stage_id || s.stage_id_new || 1;
-      const stageId = s.stage_id || s.stage_id_new || stageNum;
-      const relStage = s.relative_stage_number || stageNum;
+      const stageNum = s.stage_id_new || s.stage_number || s.stage_id || 1;
+      const stageId = s.stage_id_new || s.stage_id || s.stage_number || 1;
+      const relStage = s.relative_stage_number || 1;
       const secNum = s.section_number || (activeSectionIndex ?? 0) + 1;
       const unitNum = s.unit_number || 1;
       const title = s.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
       const isFlag = s.tier_level === 4;
       const signKey = `${s.sign_id || 1}`;
+      const signName = s.sign_name || `Sign ${s.sign_id}`;
 
       if (!map.has(stageNum)) {
-        const signMap = new Map<string, { score: number; date: string }>();
-        signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
+        const signMap = new Map<string, { score: number; date: string; name: string }>();
+        signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
         map.set(stageNum, {
           stageNum,
           relativeStageNum: relStage,
           stageId,
           title,
           signMap,
+          allScores: [s.score_overall],
           dates: s.created_at ? [s.created_at] : [],
           hasFlag: isFlag,
         });
@@ -93,13 +97,14 @@ export default function ParentHomePage() {
         const item = map.get(stageNum)!;
         if (s.created_at) item.dates.push(s.created_at);
         if (isFlag) item.hasFlag = true;
+        item.allScores.push(s.score_overall);
 
         if (!item.signMap.has(signKey)) {
-          item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
+          item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
         } else {
           const existing = item.signMap.get(signKey)!;
           if (new Date(s.created_at || "").getTime() > new Date(existing.date).getTime()) {
-            item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "" });
+            item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
           }
         }
       }
@@ -107,10 +112,12 @@ export default function ParentHomePage() {
 
     return Array.from(map.values())
       .map((item) => {
-        const culminatingScores = Array.from(item.signMap.values()).map((v) => v.score);
+        const culminatingItems = Array.from(item.signMap.values());
+        const signNames = culminatingItems.map((v: any) => v.name).filter(Boolean);
+        const allScores = item.allScores || [];
         const avg =
-          culminatingScores.length > 0
-            ? culminatingScores.reduce((a, b) => a + b, 0) / culminatingScores.length
+          allScores.length > 0
+            ? allScores.reduce((a: number, b: number) => a + b, 0) / allScores.length
             : 0;
         const sortedDates = item.dates.sort(
           (a, b) => new Date(b).getTime() - new Date(a).getTime()
@@ -120,7 +127,9 @@ export default function ParentHomePage() {
           relativeStageNum: item.relativeStageNum,
           stageId: item.stageId,
           title: item.title,
+          signNames,
           signCount: item.signMap.size,
+          totalAttempts: allScores.length,
           avgScore: Math.round(avg),
           latestDate: sortedDates[0] || "",
           isFlagged: item.hasFlag,
@@ -523,15 +532,22 @@ export default function ParentHomePage() {
                                 <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#FFF4E5] font-extrabold text-sm text-[#FF8A00] shadow-2xs">
                                   {stageItem.relativeStageNum}
                                 </span>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-gray-800 text-[15px]">
-                                    {stageItem.title}
-                                  </span>
-                                  {stageItem.isFlagged && (
-                                    <span
-                                      className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse shrink-0"
-                                      title="Needs practice / Tier 4 flagged"
-                                    />
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-gray-800 text-[15px]">
+                                      {stageItem.title}
+                                    </span>
+                                    {stageItem.isFlagged && (
+                                      <span
+                                        className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse shrink-0"
+                                        title="Needs practice / Tier 4 flagged"
+                                      />
+                                    )}
+                                  </div>
+                                  {stageItem.signNames && stageItem.signNames.length > 0 && (
+                                    <span className="text-xs text-gray-500 font-medium mt-0.5">
+                                      Signs: {stageItem.signNames.join(", ")}
+                                    </span>
                                   )}
                                 </div>
                               </div>
@@ -548,10 +564,10 @@ export default function ParentHomePage() {
                                 : "Recent"}
                             </td>
 
-                            {/* Rounds Column */}
+                            {/* Attempts Column */}
                             <td className="px-4 py-4.5 font-medium text-gray-600 text-sm">
                               <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-gray-100 text-xs font-semibold text-gray-700">
-                                {stageItem.signCount} {stageItem.signCount === 1 ? "round attempt" : "rounds attempt"}
+                                {stageItem.totalAttempts || stageItem.signCount} {(stageItem.totalAttempts || stageItem.signCount) === 1 ? "attempt" : "attempts"}
                               </span>
                             </td>
 

@@ -566,6 +566,7 @@ async def create_curriculum_section(curriculum_id: uuid.UUID, payload: SectionCr
     )
     db.add(new_sec)
     await db.commit()
+    invalidate_curriculum_cache()
     
     # Reload with relationships so Pydantic SectionResponse can serialize .units without MissingGreenlet error
     res = await db.execute(
@@ -589,6 +590,7 @@ async def update_curriculum_section(section_id: uuid.UUID, payload: SectionUpdat
     if payload.section_number is not None:
         sec.section_number = payload.section_number
     await db.commit()
+    invalidate_curriculum_cache()
     
     reloaded = await db.execute(
         select(CurriculumSection)
@@ -608,6 +610,7 @@ async def delete_curriculum_section(section_id: uuid.UUID, db: AsyncSession = De
         raise HTTPException(status_code=404, detail="Section not found")
     await db.delete(sec)
     await db.commit()
+    invalidate_curriculum_cache()
     return {"status": "deleted", "section_id": str(section_id)}
 
 
@@ -643,6 +646,7 @@ async def create_section_unit(section_id: uuid.UUID, payload: UnitCreate, db: As
     )
     db.add(new_unit)
     await db.commit()
+    invalidate_curriculum_cache()
     
     reloaded = await db.execute(
         select(CurriculumUnit)
@@ -663,6 +667,7 @@ async def update_section_unit(unit_id: uuid.UUID, payload: UnitUpdate, db: Async
         un.unit_number = payload.unit_number
     await db.commit()
     await db.refresh(un)
+    invalidate_curriculum_cache()
     return un
 
 @router.delete("/curriculum-units/{unit_id}", status_code=status.HTTP_200_OK)
@@ -673,6 +678,7 @@ async def delete_section_unit(unit_id: uuid.UUID, db: AsyncSession = Depends(get
         raise HTTPException(status_code=404, detail="Unit not found")
     await db.delete(un)
     await db.commit()
+    invalidate_curriculum_cache()
     return {"status": "deleted", "unit_id": str(unit_id)}
 
 
@@ -713,6 +719,7 @@ async def create_unit_stage(unit_id: uuid.UUID, payload: StageCreate, db: AsyncS
     db.add(new_stage)
     await db.commit()
     await db.refresh(new_stage)
+    invalidate_curriculum_cache()
     return new_stage
 
 @router.get("/curriculum-stages/{stage_id}")
@@ -802,6 +809,7 @@ async def update_curriculum_stage(stage_id: str, payload: StageUpdate, db: Async
         st.is_active = payload.is_active
     await db.commit()
     await db.refresh(st)
+    invalidate_curriculum_cache()
     return st
 
 @router.delete("/curriculum-stages/{stage_id}", status_code=status.HTTP_200_OK)
@@ -840,6 +848,7 @@ async def delete_curriculum_stage(stage_id: str, db: AsyncSession = Depends(get_
         
     await db.delete(st)
     await db.commit()
+    invalidate_curriculum_cache()
     return {"status": "deleted", "stage_id": stage_id_val}
 
 @router.delete("/curriculum-signs/{sign_id}", status_code=status.HTTP_200_OK)
@@ -880,6 +889,7 @@ async def delete_curriculum_sign(sign_id: str, db: AsyncSession = Depends(get_db
 
     await db.delete(b)
     await db.commit()
+    invalidate_curriculum_cache()
     return {"status": "deleted", "sign_id": sign_id}
 
 from fastapi import UploadFile, File

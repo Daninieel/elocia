@@ -87,6 +87,11 @@ if exist "services\haarcascade_frontalface_default.xml" (
 echo       Creating ZIP archive: dist\ELOCIA_Student_Desktop.zip ...
 powershell -Command "Compress-Archive -Path 'dist\ELOCIA_Student' -DestinationPath 'dist\ELOCIA_Student_Desktop.zip' -Force" >nul 2>&1
 
+:: Also mirror to ELOCIA_Student_Desktop directory if user previously extracted it
+if exist "dist\ELOCIA_Student_Desktop" (
+    xcopy /E /I /Y "dist\ELOCIA_Student" "dist\ELOCIA_Student_Desktop\" >nul
+)
+
 echo.
 echo =========================================================
 echo       BUILD COMPLETED SUCCESSFULLY!                      

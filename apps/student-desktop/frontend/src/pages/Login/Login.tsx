@@ -12,22 +12,50 @@ interface LoginProps {
 
 export default function Login({ onStart }: LoginProps) {
   const [view, setView] = useState<'welcome' | 'select' | 'pin'>('welcome');
-  const [students, setStudents] = useState<StudentProfile[]>([]);
+  const [students, setStudents] = useState<StudentProfile[]>(() => {
+    try {
+      const cached = localStorage.getItem('elocia_cached_students');
+      return cached ? JSON.parse(cached) : [];
+    } catch {
+      return [];
+    }
+  });
   const [selectedStudent, setSelectedStudent] = useState<StudentProfile | null>(null);
   const [showServerModal, setShowServerModal] = useState<boolean>(false);
   const [serverInput, setServerInput] = useState<string>(getApiBase());
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>('connecting');
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'error'>(() => {
+    try {
+      const cached = localStorage.getItem('elocia_cached_students');
+      return cached && JSON.parse(cached).length > 0 ? 'connected' : 'connecting';
+    } catch {
+      return 'connecting';
+    }
+  });
 
-  const loadStudents = () => {
-    setConnectionStatus('connecting');
+  const loadStudents = (attempt = 1) => {
+    setConnectionStatus((prev) => (prev === 'connected' ? 'connected' : 'connecting'));
     fetchStudents()
       .then(data => {
-        setStudents(data);
-        setConnectionStatus(data && data.length > 0 ? 'connected' : 'error');
+        if (data && data.length > 0) {
+          setStudents(data);
+          try {
+            localStorage.setItem('elocia_cached_students', JSON.stringify(data));
+          } catch {}
+          setConnectionStatus('connected');
+        } else if (attempt < 5) {
+          // Automatically retry while Render cloud instance completes cold start
+          setTimeout(() => loadStudents(attempt + 1), 3000);
+        } else {
+          setConnectionStatus(students.length > 0 ? 'connected' : 'error');
+        }
       })
       .catch(err => {
         console.error('Failed to load students:', err);
-        setConnectionStatus('error');
+        if (attempt < 5) {
+          setTimeout(() => loadStudents(attempt + 1), 3000);
+        } else {
+          setConnectionStatus(students.length > 0 ? 'connected' : 'error');
+        }
       });
   };
 

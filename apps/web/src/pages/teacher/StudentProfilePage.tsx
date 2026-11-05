@@ -39,48 +39,59 @@ export default function TeacherStudentProfilePage() {
     const stageMap: Record<number, {
       stageNum: number;
       relativeStageNum: number;
+      stageId: number;
       title: string;
       unitNumber: number;
       scores: number[];
+      allScores: number[];
       latestDate: string;
       isFlagged: boolean;
       roundsCount: number;
+      totalAttempts: number;
+      signNames: string[];
     }> = {};
 
     recentAttempts.forEach((attempt) => {
-      const sNum = attempt.stage_number || attempt.stage_id || attempt.stage_id_new || 1;
-      const relStage = attempt.relative_stage_number || sNum;
+      const sNum = attempt.stage_id_new || attempt.stage_number || attempt.stage_id || 1;
+      const stageId = attempt.stage_id_new || attempt.stage_id || attempt.stage_number || 1;
+      const relStage = attempt.relative_stage_number || 1;
       const secNum = attempt.section_number || 1;
       const unitNum = attempt.unit_number || 1;
       const formattedTitle = attempt.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
 
       const signKey = `${attempt.sign_id || 1}`;
+      const signName = attempt.sign_name || `Sign ${attempt.sign_id}`;
 
       if (!stageMap[sNum]) {
-        const signMap = new Map<string, { score: number; date: string }>();
-        signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+        const signMap = new Map<string, { score: number; date: string; name: string }>();
+        signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
         (stageMap as any)[sNum] = {
           stageNum: sNum,
           relativeStageNum: relStage,
+          stageId,
           title: formattedTitle,
           unitNumber: unitNum,
           signMap,
+          allScores: [attempt.score_overall],
           latestDate: attempt.created_at || "",
           isFlagged: false,
           roundsCount: 0,
+          totalAttempts: 1,
         };
       } else {
+        (stageMap as any)[sNum].allScores.push(attempt.score_overall);
         const signMap = (stageMap as any)[sNum].signMap;
         if (!signMap.has(signKey)) {
-          signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+          signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
         } else {
           const existing = signMap.get(signKey)!;
           if (new Date(attempt.created_at || "").getTime() > new Date(existing.date).getTime()) {
-            signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "" });
+            signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
           }
         }
       }
       (stageMap as any)[sNum].roundsCount = (stageMap as any)[sNum].signMap.size;
+      (stageMap as any)[sNum].totalAttempts = (stageMap as any)[sNum].allScores.length;
       if (attempt.tier_level === 4) {
         stageMap[sNum].isFlagged = true;
       }
@@ -90,10 +101,13 @@ export default function TeacherStudentProfilePage() {
     });
 
     return Object.values(stageMap).map((item: any) => {
-      const culminatingScores = Array.from((item.signMap as Map<string, { score: number }>).values()).map(v => v.score);
-      const avg = culminatingScores.length > 0 ? culminatingScores.reduce((a, b) => a + b, 0) / culminatingScores.length : 0;
+      const culminatingItems = Array.from((item.signMap as Map<string, { score: number; name: string }>).values());
+      const signNames = culminatingItems.map(v => v.name).filter(Boolean);
+      const allScores = (item.allScores as number[]) || [];
+      const avg = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
       return {
         ...item,
+        signNames,
         avgScore: Math.round(avg),
       };
     }).sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
@@ -308,18 +322,25 @@ export default function TeacherStudentProfilePage() {
                               <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#FFF4E5] font-extrabold text-sm text-[#FF8A00] shadow-2xs">
                                 {stageGroup.relativeStageNum}
                               </span>
-                              <div className="flex items-center gap-2">
-                                <span className="font-bold text-gray-800 text-[15px]">
-                                  {stageGroup.title}
-                                </span>
-                                <span className="rounded-lg bg-orange-100/60 px-2 py-0.5 text-xs font-semibold text-orange-700">
-                                  {stageGroup.roundsCount} {stageGroup.roundsCount === 1 ? "round attempt" : "rounds attempt"}
-                                </span>
-                                {stageGroup.isFlagged && (
-                                  <span
-                                    className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse"
-                                    title="Flagged (Tier 4 / Needs Focus)"
-                                  />
+                              <div className="flex flex-col">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-gray-800 text-[15px]">
+                                    {stageGroup.title}
+                                  </span>
+                                  <span className="rounded-lg bg-orange-100/60 px-2 py-0.5 text-xs font-semibold text-orange-700">
+                                    {stageGroup.totalAttempts || stageGroup.roundsCount} {(stageGroup.totalAttempts || stageGroup.roundsCount) === 1 ? "attempt" : "attempts"}
+                                  </span>
+                                  {stageGroup.isFlagged && (
+                                    <span
+                                      className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse"
+                                      title="Flagged (Tier 4 / Needs Focus)"
+                                    />
+                                  )}
+                                </div>
+                                {stageGroup.signNames && stageGroup.signNames.length > 0 && (
+                                  <span className="text-xs text-gray-500 font-medium mt-0.5">
+                                    Signs: {stageGroup.signNames.join(", ")}
+                                  </span>
                                 )}
                               </div>
                             </div>
@@ -350,7 +371,7 @@ export default function TeacherStudentProfilePage() {
                               type="button"
                               onClick={() => {
                                 setSelectedStage({
-                                  stageId: stageGroup.stageNum,
+                                  stageId: stageGroup.stageId || stageGroup.stageNum,
                                   title: stageGroup.title,
                                   relativeStageNum: stageGroup.relativeStageNum,
                                 });

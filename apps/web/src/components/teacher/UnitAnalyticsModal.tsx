@@ -43,6 +43,7 @@ interface RoundItem {
   score_movement: number;
   passed: boolean;
   tier_level?: number;
+  has_tier4?: boolean;
   attempt_number?: number;
   attempted_at?: string | null;
 }
@@ -68,6 +69,7 @@ export default function UnitAnalyticsModal({
   const [rounds, setRounds] = useState<RoundItem[]>([]);
   const [selectedRound, setSelectedRound] = useState<RoundItem | null>(null);
   const [overallScore, setOverallScore] = useState<number>(78);
+  const [totalAttempts, setTotalAttempts] = useState<number>(0);
   const [drillSuccess, setDrillSuccess] = useState<boolean>(false);
   const [isCreatingDrill, setIsCreatingDrill] = useState<boolean>(false);
 
@@ -89,6 +91,7 @@ export default function UnitAnalyticsModal({
         setNeedsPractice(data.needs_practice || []);
         setTrend(data.performance_trend || []);
         setOverallScore(data.overall_score || 78);
+        setTotalAttempts(data.total_attempts || (data.rounds ? data.rounds.length : 0));
         setRounds(data.rounds || []);
       })
       .catch((err) => {
@@ -228,7 +231,7 @@ export default function UnitAnalyticsModal({
                       Stage Rounds & Attempts
                     </span>
                     <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
-                      {rounds.length} {rounds.length === 1 ? "Round" : "Rounds"}
+                      {rounds.length} {rounds.length === 1 ? "Sign" : "Signs"} ({totalAttempts || rounds.length} {(totalAttempts || rounds.length) === 1 ? "attempt" : "attempts"})
                     </span>
                   </div>
                   {selectedRound && (
@@ -272,7 +275,7 @@ export default function UnitAnalyticsModal({
                           <span className="text-[11px] font-bold mt-0.5 text-gray-500">
                             Sign "{r.sign_name}"
                           </span>
-                          <div className="mt-1.5 flex items-center gap-1.5">
+                          <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1">
                             <span
                               className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
                                 isAttempted
@@ -284,6 +287,14 @@ export default function UnitAnalyticsModal({
                             >
                               {isAttempted ? `${Math.round(r.score_overall)}%` : "Not attempted"}
                             </span>
+                            {(r.has_tier4 || r.tier_level === 4) && (
+                              <span
+                                className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-extrabold text-rose-700 border border-rose-200"
+                                title="Flagged in Tier 4 (Pass-and-Flag)"
+                              >
+                                Tier 4
+                              </span>
+                            )}
                           </div>
                         </button>
                       );
@@ -311,14 +322,7 @@ export default function UnitAnalyticsModal({
                     <span className="text-xs font-bold text-gray-400">
                       Overall: {selectedRound
                         ? Math.round(selectedRound.score_overall)
-                        : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
-                        ? Math.round(
-                            rounds
-                              .filter((r) => r.score_overall > 0 || r.passed)
-                              .reduce((acc, r) => acc + r.score_overall, 0) /
-                              rounds.filter((r) => r.score_overall > 0 || r.passed).length
-                          )
-                        : overallScore}%
+                        : Math.round(overallScore)}%
                     </span>
                   </div>
 
@@ -329,45 +333,6 @@ export default function UnitAnalyticsModal({
                           { name: "Palm Orientation", key: "palm_orientation", score: selectedRound.score_palm_orientation },
                           { name: "Location", key: "location", score: selectedRound.score_location },
                           { name: "Movement", key: "movement", score: selectedRound.score_movement },
-                        ]
-                      : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
-                      ? [
-                          {
-                            name: "Handshape",
-                            key: "handshape",
-                            score:
-                              rounds
-                                .filter((r) => r.score_overall > 0 || r.passed)
-                                .reduce((acc, r) => acc + (r.score_handshape || 0), 0) /
-                              rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                          },
-                          {
-                            name: "Palm Orientation",
-                            key: "palm_orientation",
-                            score:
-                              rounds
-                                .filter((r) => r.score_overall > 0 || r.passed)
-                                .reduce((acc, r) => acc + (r.score_palm_orientation || 0), 0) /
-                              rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                          },
-                          {
-                            name: "Location",
-                            key: "location",
-                            score:
-                              rounds
-                                .filter((r) => r.score_overall > 0 || r.passed)
-                                .reduce((acc, r) => acc + (r.score_location || 0), 0) /
-                              rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                          },
-                          {
-                            name: "Movement",
-                            key: "movement",
-                            score:
-                              rounds
-                                .filter((r) => r.score_overall > 0 || r.passed)
-                                .reduce((acc, r) => acc + (r.score_movement || 0), 0) /
-                              rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                          },
                         ]
                       : parameters
                     ).map((param) => {

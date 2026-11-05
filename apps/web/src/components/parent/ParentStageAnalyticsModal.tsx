@@ -34,6 +34,7 @@ interface RoundItem {
   score_movement: number;
   passed: boolean;
   tier_level?: number;
+  has_tier4?: boolean;
   attempt_number?: number;
   attempted_at?: string | null;
 }
@@ -212,17 +213,27 @@ export default function ParentStageAnalyticsModal({
                           <span className="text-[11px] font-bold mt-0.5 text-gray-500">
                             Sign "{r.sign_name}"
                           </span>
-                          <span
-                            className={`mt-1 rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
-                              isAttempted
-                                ? r.passed
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : "bg-rose-100 text-rose-700"
-                                : "bg-gray-100 text-gray-400"
-                            }`}
-                          >
-                            {isAttempted ? `${Math.round(r.score_overall)}%` : "Not attempted"}
-                          </span>
+                          <div className="mt-1 flex flex-wrap items-center justify-center gap-1">
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
+                                isAttempted
+                                  ? r.passed
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : "bg-rose-100 text-rose-700"
+                                  : "bg-gray-100 text-gray-400"
+                              }`}
+                            >
+                              {isAttempted ? `${Math.round(r.score_overall)}%` : "Not attempted"}
+                            </span>
+                            {(r.has_tier4 || r.tier_level === 4) && (
+                              <span
+                                className="rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-extrabold text-rose-700 border border-rose-200"
+                                title="Flagged in Tier 4 (Pass-and-Flag)"
+                              >
+                                Tier 4
+                              </span>
+                            )}
+                          </div>
                         </button>
                       );
                     })}
@@ -248,14 +259,7 @@ export default function ParentStageAnalyticsModal({
                   <span className="text-xs font-bold text-gray-400">
                     Overall: {selectedRound
                       ? Math.round(selectedRound.score_overall)
-                      : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
-                      ? Math.round(
-                          rounds
-                            .filter((r) => r.score_overall > 0 || r.passed)
-                            .reduce((acc, r) => acc + r.score_overall, 0) /
-                            rounds.filter((r) => r.score_overall > 0 || r.passed).length
-                        )
-                      : overallScore}%
+                      : Math.round(overallScore)}%
                   </span>
                 </div>
 
@@ -266,45 +270,6 @@ export default function ParentStageAnalyticsModal({
                         { name: "Palm Orientation", key: "palm_orientation", score: selectedRound.score_palm_orientation },
                         { name: "Location", key: "location", score: selectedRound.score_location },
                         { name: "Movement", key: "movement", score: selectedRound.score_movement },
-                      ]
-                    : rounds.filter((r) => r.score_overall > 0 || r.passed).length > 0
-                    ? [
-                        {
-                          name: "Handshape",
-                          key: "handshape",
-                          score:
-                            rounds
-                              .filter((r) => r.score_overall > 0 || r.passed)
-                              .reduce((acc, r) => acc + (r.score_handshape || 0), 0) /
-                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                        },
-                        {
-                          name: "Palm Orientation",
-                          key: "palm_orientation",
-                          score:
-                            rounds
-                              .filter((r) => r.score_overall > 0 || r.passed)
-                              .reduce((acc, r) => acc + (r.score_palm_orientation || 0), 0) /
-                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                        },
-                        {
-                          name: "Location",
-                          key: "location",
-                          score:
-                            rounds
-                              .filter((r) => r.score_overall > 0 || r.passed)
-                              .reduce((acc, r) => acc + (r.score_location || 0), 0) /
-                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                        },
-                        {
-                          name: "Movement",
-                          key: "movement",
-                          score:
-                            rounds
-                              .filter((r) => r.score_overall > 0 || r.passed)
-                              .reduce((acc, r) => acc + (r.score_movement || 0), 0) /
-                            rounds.filter((r) => r.score_overall > 0 || r.passed).length,
-                        },
                       ]
                     : parameters
                   ).map((param) => {

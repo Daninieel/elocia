@@ -336,12 +336,16 @@ async def get_student_scores(student_id: str, db: AsyncSession = Depends(get_db)
         else:
             rel_stage = stage_num or a.stage_id or 1
 
-        assignment_name = f"Section {effective_sec}, Unit {effective_unit}, Stage {rel_stage}"
+        sec_label = sec_title if sec_title and not sec_title.lower().startswith("section") else None
+        if sec_label:
+            assignment_name = f"Section {effective_sec}: {sec_label}, Unit {effective_unit}, Stage {rel_stage}"
+        else:
+            assignment_name = f"Section {effective_sec}, Unit {effective_unit}, Stage {rel_stage}"
 
         response_items.append({
             "id": str(a.id),
             "activity_type": a.activity_type,
-            "stage_id": stage_num or a.stage_id or 1,
+            "stage_id": a.stage_id_new or stage_num or a.stage_id or 1,
             "relative_stage_number": rel_stage,
             "sign_id": a.sign_id,
             "sign_name": sign_name,

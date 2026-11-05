@@ -252,12 +252,26 @@ async def get_student_unit_analytics(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Student not found")
     user, profile = student_row
 
+    # Resolve stage: check if stage_id matches CurriculumStage by id or stage_number
+    stage_res = await db.execute(
+        select(CurriculumStage).where(
+            (CurriculumStage.id == stage_id) | (CurriculumStage.stage_number == stage_id)
+        )
+    )
+    curr_stage = stage_res.scalar_one_or_none()
+    stage_filter = {stage_id}
+    target_pk = stage_id
+    if curr_stage:
+        stage_filter.add(curr_stage.id)
+        stage_filter.add(curr_stage.stage_number)
+        target_pk = curr_stage.id
+
     # Query evaluation attempts for this student and stage (or fallback to student's all attempts)
     attempts_res = await db.execute(
         select(EvaluationAttempt)
         .where(
             EvaluationAttempt.student_id == student_id,
-            (EvaluationAttempt.stage_id == stage_id) | (EvaluationAttempt.stage_id_new == stage_id)
+            (EvaluationAttempt.stage_id_new == target_pk) | (EvaluationAttempt.stage_id.in_(stage_filter))
         )
         .order_by(EvaluationAttempt.created_at.desc())
     )
@@ -280,23 +294,29 @@ async def get_student_unit_analytics(
         if sid:
             sign_names[sid] = sname
 
-    # Identify culminating performance per sign:
-    # attempts is ordered by created_at.desc(), so the first time we see s_id is the latest attempt
-    latest_attempt_by_sign = {}
+    # Group attempts by sign to inspect both culminating attempt and any Tier 4 struggle:
+    attempts_by_sign = {}
     for a in attempts:
         s_id = a.sign_id or a.stage_id or 1
-        if s_id not in latest_attempt_by_sign:
-            latest_attempt_by_sign[s_id] = a
+        attempts_by_sign.setdefault(s_id, []).append(a)
 
-    # Calculate parameter mastery across the student's culminating attempts per sign in this stage:
-    # Ensures Stage Average matches the round cards and does not penalize pre-scaffold struggle attempts!
-    eval_attempts = list(latest_attempt_by_sign.values()) if latest_attempt_by_sign else attempts
-    if eval_attempts:
-        avg_handshape = round(sum((a.score_handshape or 0) for a in eval_attempts) / len(eval_attempts), 1)
-        avg_palm = round(sum((a.score_palm_orientation or 0) for a in eval_attempts) / len(eval_attempts), 1)
-        avg_location = round(sum((a.score_location or 0) for a in eval_attempts) / len(eval_attempts), 1)
-        avg_movement = round(sum((a.score_movement or 0) for a in eval_attempts) / len(eval_attempts), 1)
-        overall_score = round(sum((a.score_overall or 0) for a in eval_attempts) / len(eval_attempts), 1)
+    latest_attempt_by_sign = {}
+    tier4_attempt_by_sign = {}
+    for s_id, s_atts in attempts_by_sign.items():
+        latest_attempt_by_sign[s_id] = s_atts[0]  # First is latest because attempts is ordered by created_at.desc()
+        for a in s_atts:
+            if a.tier_level and a.tier_level >= 4:
+                tier4_attempt_by_sign[s_id] = a
+                break
+
+    # Calculate overall grade and parameter mastery divided by TOTAL attempts across this stage:
+    valid_attempts = [a for a in attempts if a.score_overall is not None and a.score_overall > 0]
+    if valid_attempts:
+        avg_handshape = round(sum((a.score_handshape or 0) for a in valid_attempts) / len(valid_attempts), 1)
+        avg_palm = round(sum((a.score_palm_orientation or 0) for a in valid_attempts) / len(valid_attempts), 1)
+        avg_location = round(sum((a.score_location or 0) for a in valid_attempts) / len(valid_attempts), 1)
+        avg_movement = round(sum((a.score_movement or 0) for a in valid_attempts) / len(valid_attempts), 1)
+        overall_score = round(sum((a.score_overall or 0) for a in valid_attempts) / len(valid_attempts), 1)
     else:
         # Realistic default baseline if student has zero attempts
         avg_handshape = 88.0
@@ -322,23 +342,21 @@ async def get_student_unit_analytics(
     lowest_param = min(param_dict, key=param_dict.get)
     diagnostic_insight = f"Student is struggling slightly with {lowest_param} parameters. Consider focusing practice on spatial positioning and accuracy."
 
+    # Identify all signs in this stage that triggered Tier 4 struggle for targeted focus drills:
     needs_practice = []
     seen_signs = set()
-    for s_id, latest_att in latest_attempt_by_sign.items():
-        # ONLY trigger for signs where the student reached Tier 4 struggle!
-        # Low scores (e.g. 60%) or failed attempts do NOT trigger unless they reached Tier 4.
-        if latest_att.tier_level and latest_att.tier_level >= 4:
-            name = sign_names.get(s_id, f"Sign {s_id}")
-            if name not in seen_signs:
-                seen_signs.add(name)
-                needs_practice.append({
-                    "sign_id": s_id,
-                    "name": name,
-                    "stage_id": latest_att.stage_id or stage_id,
-                    "score": round(latest_att.score_overall or 45.0, 1),
-                    "tier_level": latest_att.tier_level or 4,
-                    "reason": f"Flagged in Tier {latest_att.tier_level or 4}"
-                })
+    for s_id, t4_att in tier4_attempt_by_sign.items():
+        name = sign_names.get(s_id, f"Sign {s_id}")
+        if name not in seen_signs:
+            seen_signs.add(name)
+            needs_practice.append({
+                "sign_id": s_id,
+                "name": name,
+                "stage_id": t4_att.stage_id or target_pk,
+                "score": round(t4_att.score_overall or 45.0, 1),
+                "tier_level": t4_att.tier_level or 4,
+                "reason": f"Flagged in Tier {t4_att.tier_level or 4} Pass-and-Flag"
+            })
 
     # 100% Real Performance Trend (Week 1, Week 2, Week 3, Week 4)
     # Calculated from real DB attempts matching the Parent portal calendar week grouping!
@@ -377,22 +395,35 @@ async def get_student_unit_analytics(
         ]
 
     # Construct detailed rounds breakdown for this stage
-    # Look up all baseline items configured for this stage
+    # Look up all active baseline items configured for this stage (prioritizing stage_id_new)
     stage_baselines_res = await db.execute(
         select(FSLBaseline)
         .where(
-            (FSLBaseline.stage_id_new == stage_id) | (FSLBaseline.stage_id == stage_id),
+            FSLBaseline.stage_id_new == target_pk,
             FSLBaseline.is_active == True
         )
         .order_by(FSLBaseline.sign_id.asc())
     )
     stage_baselines = stage_baselines_res.scalars().all()
 
+    # Fallback to stage_id filter if no baselines matched stage_id_new
+    if not stage_baselines:
+        stage_baselines_res = await db.execute(
+            select(FSLBaseline)
+            .where(
+                FSLBaseline.stage_id.in_(stage_filter),
+                FSLBaseline.is_active == True
+            )
+            .order_by(FSLBaseline.sign_id.asc())
+        )
+        stage_baselines = stage_baselines_res.scalars().all()
+
     rounds_data = []
     # If no stage_baselines found, build from latest_attempt_by_sign
     if stage_baselines:
         for b in stage_baselines:
             latest_att = latest_attempt_by_sign.get(b.sign_id)
+            has_t4 = b.sign_id in tier4_attempt_by_sign
             if latest_att:
                 rounds_data.append({
                     "sign_id": b.sign_id,
@@ -403,7 +434,8 @@ async def get_student_unit_analytics(
                     "score_location": round(latest_att.score_location or 0.0, 1),
                     "score_movement": round(latest_att.score_movement or 0.0, 1),
                     "passed": bool(latest_att.passed),
-                    "tier_level": latest_att.tier_level or 1,
+                    "tier_level": 4 if has_t4 else (latest_att.tier_level or 1),
+                    "has_tier4": has_t4,
                     "attempt_number": latest_att.attempt_number or 1,
                     "attempted_at": str(latest_att.created_at) if latest_att.created_at else None
                 })
@@ -418,12 +450,14 @@ async def get_student_unit_analytics(
                     "score_movement": 0.0,
                     "passed": False,
                     "tier_level": 1,
+                    "has_tier4": False,
                     "attempt_number": 0,
                     "attempted_at": None
                 })
     else:
         for s_id, latest_att in latest_attempt_by_sign.items():
             name = sign_names.get(s_id, f"Sign {s_id}")
+            has_t4 = s_id in tier4_attempt_by_sign
             rounds_data.append({
                 "sign_id": s_id,
                 "sign_name": name,
@@ -433,7 +467,8 @@ async def get_student_unit_analytics(
                 "score_location": round(latest_att.score_location or 0.0, 1),
                 "score_movement": round(latest_att.score_movement or 0.0, 1),
                 "passed": bool(latest_att.passed),
-                "tier_level": latest_att.tier_level or 1,
+                "tier_level": 4 if has_t4 else (latest_att.tier_level or 1),
+                "has_tier4": has_t4,
                 "attempt_number": latest_att.attempt_number or 1,
                 "attempted_at": str(latest_att.created_at) if latest_att.created_at else None
             })
@@ -441,8 +476,11 @@ async def get_student_unit_analytics(
     return {
         "student_id": str(student_id),
         "student_name": user.name,
-        "stage_id": stage_id,
+        "stage_id": target_pk,
+        "stage_number": curr_stage.stage_number if curr_stage else stage_id,
+        "stage_title": curr_stage.title if curr_stage else None,
         "overall_score": overall_score,
+        "total_attempts": len(valid_attempts),
         "parameter_mastery": parameter_mastery,
         "diagnostic_insight": diagnostic_insight,
         "needs_practice": needs_practice,

@@ -1,11 +1,54 @@
+import sys
+import os
+
+# Crucial PyInstaller GUI mode fix: When console=False, sys.stdout and sys.stderr are None.
+# Uvicorn's ColourizedFormatter calls sys.stdout.isatty(), crashing the background thread.
+class SafeLogWriter:
+    def __init__(self, log_filepath=None):
+        self.log_filepath = log_filepath
+
+    def write(self, s):
+        if not s:
+            return
+        if self.log_filepath:
+            try:
+                with open(self.log_filepath, "a", encoding="utf-8") as f:
+                    f.write(s)
+            except Exception:
+                pass
+
+    def flush(self):
+        pass
+
+    def isatty(self):
+        return False
+
+# Initialize safe writers if running in windowed GUI mode without a console
+_app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+_engine_log = os.path.join(_app_dir, "desktop_engine.log")
+
+if sys.stdout is None or not hasattr(sys.stdout, 'isatty'):
+    sys.stdout = SafeLogWriter(_engine_log)
+if sys.stderr is None or not hasattr(sys.stderr, 'isatty'):
+    sys.stderr = SafeLogWriter(_engine_log)
+
+# Provide dummy matplotlib module if excluded or unbundled so MediaPipe drawing_utils never crashes
+if 'matplotlib' not in sys.modules:
+    try:
+        import matplotlib
+    except ImportError:
+        import types
+        _m = types.ModuleType('matplotlib')
+        _m.pyplot = types.ModuleType('matplotlib.pyplot')
+        sys.modules['matplotlib'] = _m
+        sys.modules['matplotlib.pyplot'] = _m.pyplot
+
 import webview
 import uvicorn
 import cv2
 import numpy as np
 import base64
 import json
-import sys
-import os
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -53,7 +96,7 @@ async def get_app_config():
     for cp in config_paths:
         if os.path.exists(cp):
             try:
-                with open(cp, "r", encoding="utf-8") as f:
+                with open(cp, "r", encoding="utf-8-sig") as f:
                     data = json.load(f)
                     if "api_url" in data and data["api_url"]:
                         candidate = data["api_url"].strip().rstrip("/")
@@ -124,12 +167,74 @@ diag_state = {
     "stage_id": None
 }
 
-def resolve_baseline_file(stage_id, activity_type="evaluation"):
+SIGN_NAME_ALIASES = {
+    # Letters (Alphabet)
+    "a": "170",
+    "b": "171",
+    "f": "116",
+    "g": "117",
+    "h": "118",
+    "i": "119",
+    "j": "120",
+    # Colors
+    "black": "172",
+    "blue": "173",
+    "brown": "174",
+    "green": "175",
+    "grey": "176",
+    "gray": "176",
+    "orange": "177",
+    # Shapes
+    "circle": "178",
+    "diamond": "179",
+    "heart": "180",
+    "oval": "181",
+    "rectangle": "182",
+    "square": "183",
+    # Numbers 1-10
+    "one": "101",
+    "two": "102",
+    "three": "103",
+    "four": "104",
+    "five": "105",
+    "six": "106",
+    "seven": "107",
+    "eight": "108",
+    "nine": "109",
+    "ten": "110",
+    "1": "101",
+    "2": "102",
+    "3": "103",
+    "4": "104",
+    "5": "105",
+    "6": "106",
+    "7": "107",
+    "8": "108",
+    "9": "109",
+    "10": "110",
+    # Numbers 11-20
+    "11": "121",
+    "12": "122",
+    "13": "123",
+    "14": "124",
+    "15": "125",
+    "16": "126",
+    "17": "127",
+    "18": "128",
+    "19": "129",
+    "20": "130",
+    # Animals
+    "bear": "131",
+    "cat": "133",
+}
+
+def resolve_baseline_file(stage_id, activity_type="evaluation", stage_name=None):
     """
     Resolves the baseline JSON file from organized directories:
     1. Minigames: baselines/minigames/<activity_type>/baseline_<id>.json
     2. Lessons: baselines/lessons/baseline_<id>.json
     3. Root fallback & backend storage fallback for complete compatibility
+    Maps both numeric stage IDs and human sign names (e.g. 'Blue' -> baseline_173.json).
     """
     app_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(__file__)
     base_dirs = [
@@ -139,26 +244,43 @@ def resolve_baseline_file(stage_id, activity_type="evaluation"):
         os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'backend', 'storage', 'baselines'))
     ]
 
-    # Map raw numbers (1-10) to sign IDs (101-110) if needed
-    alt_ids = [str(stage_id)]
-    if isinstance(stage_id, str):
-        cleaned = stage_id.strip()
-        alt_ids.extend([cleaned, cleaned.lower(), cleaned.upper(), cleaned.capitalize()])
-    try:
-        num = int(stage_id)
-        if 1 <= num <= 26:
-            # Map 1 -> A, 2 -> B etc.
-            alt_ids.append(chr(64 + num))
-        if 1 <= num <= 10:
-            alt_ids.append(str(100 + num))
-        elif 101 <= num <= 110:
-            alt_ids.append(str(num - 100))
-    except (ValueError, TypeError):
-        # stage_id might already be a letter string like 'A'
-        if isinstance(stage_id, str) and len(stage_id) == 1 and stage_id.isalpha():
-            letter_num = ord(stage_id.upper()) - 64
-            alt_ids.append(str(letter_num))
-            alt_ids.append(stage_id.upper())
+    alt_ids = []
+
+    # 1. Exact numeric stage_id takes highest priority if provided
+    if stage_id is not None:
+        alt_ids.append(str(stage_id))
+
+    # 2. Add verified sign name mapping if stage_name is provided
+    if stage_name and isinstance(stage_name, str):
+        clean_name = stage_name.replace('!', '').replace('?', '').replace('.', '').strip()
+        lower_name = clean_name.lower()
+        if lower_name in SIGN_NAME_ALIASES:
+            alt_ids.append(SIGN_NAME_ALIASES[lower_name])
+        for k, v in SIGN_NAME_ALIASES.items():
+            if k in lower_name and v not in alt_ids:
+                alt_ids.append(v)
+        alt_ids.extend([clean_name, clean_name.lower(), clean_name.capitalize(), clean_name.upper()])
+
+    # 3. Add string variants of stage_id and numeric mappings
+    if stage_id is not None:
+        if isinstance(stage_id, str):
+            cleaned = stage_id.strip()
+            alt_ids.extend([cleaned, cleaned.lower(), cleaned.upper(), cleaned.capitalize()])
+            if cleaned.lower() in SIGN_NAME_ALIASES and SIGN_NAME_ALIASES[cleaned.lower()] not in alt_ids:
+                alt_ids.append(SIGN_NAME_ALIASES[cleaned.lower()])
+        try:
+            num = int(stage_id)
+            if 1 <= num <= 26:
+                alt_ids.append(chr(64 + num))
+            if 1 <= num <= 10:
+                alt_ids.append(str(100 + num))
+            elif 101 <= num <= 110:
+                alt_ids.append(str(num - 100))
+        except (ValueError, TypeError):
+            if isinstance(stage_id, str) and len(stage_id) == 1 and stage_id.isalpha():
+                letter_num = ord(stage_id.upper()) - 64
+                alt_ids.append(str(letter_num))
+                alt_ids.append(stage_id.upper())
 
     # Remove duplicates preserving order
     alt_ids = list(dict.fromkeys(alt_ids))
@@ -290,15 +412,24 @@ async def evaluate_endpoint(websocket: WebSocket):
 
             if payload.get('action') == 'start_diagnostic':
                 stage_id = payload.get('stageId', 1)
+                stage_name = payload.get('stageName')
                 activity_type = payload.get('activityType', "evaluation")
-                baseline_file = resolve_baseline_file(stage_id, activity_type)
+                diag_state["on"] = True
+                diag_state["stage_id"] = stage_id
+                baseline_file = resolve_baseline_file(stage_id, activity_type, stage_name=stage_name)
                 if baseline_file and os.path.exists(baseline_file):
-                    with open(baseline_file, 'r', encoding='utf-8') as f:
-                        b_seq = json.load(f)
-                        diag_state["baseline"] = b_seq
-                        diag_state["mid"] = get_diagnostic_baseline(b_seq)
-                        diag_state["on"] = True
-                        diag_state["stage_id"] = stage_id
+                    try:
+                        with open(baseline_file, 'r', encoding='utf-8') as f:
+                            b_seq = json.load(f)
+                            diag_state["baseline"] = b_seq
+                            diag_state["mid"] = get_diagnostic_baseline(b_seq)
+                    except Exception as e:
+                        print(f"[Warning] Failed loading baseline for diagnostic: {e}")
+                        diag_state["baseline"] = None
+                        diag_state["mid"] = None
+                else:
+                    diag_state["baseline"] = None
+                    diag_state["mid"] = None
                 continue
 
             if payload.get('action') == 'stop_diagnostic':
@@ -314,8 +445,8 @@ async def evaluate_endpoint(websocket: WebSocket):
                 tier_level = payload.get('tierLevel', 1)
                 activity_type = payload.get('activityType', "evaluation")
 
-                # Resolve baseline from organized folders (minigames vs lessons)
-                baseline_file = resolve_baseline_file(stage_id, activity_type)
+                # Resolve baseline from organized folders (minigames vs lessons) with sign name support
+                baseline_file = resolve_baseline_file(stage_id, activity_type, stage_name=stage_name)
                 
                 if not baseline_file or not os.path.exists(baseline_file):
                     await websocket.send_json({
@@ -489,19 +620,25 @@ async def evaluate_endpoint(websocket: WebSocket):
             
             # Streaming presence / landmarks to frontend
             hand_detected = (rh_valid is not None or lh_valid is not None or pose_wrist_present)
-            if diag_state["on"] and diag_state["mid"] is not None:
-                scores = diagnostic_frame_scores(frame_data, diag_state["mid"])
+            pose_dict = {
+                "nose": frame_data["pose"][0],
+                "leftShoulder": frame_data["pose"][11],
+                "rightShoulder": frame_data["pose"][12]
+            }
+
+            if diag_state["on"]:
+                if diag_state["mid"] is not None:
+                    scores = diagnostic_frame_scores(frame_data, diag_state["mid"])
+                else:
+                    scores = {"handshape": 0, "palmOrientation": 0, "location": 0, "movement": 0}
+
                 await websocket.send_json({
                     "action": "landmarks",
                     "hand_detected": hand_detected,
                     "hand": frame_data["hand"],
                     "right_hand": frame_data["right_hand"] if frame_data["has_right"] else None,
                     "left_hand": frame_data["left_hand"] if frame_data["has_left"] else None,
-                    "pose": {
-                        "nose": frame_data["pose"][0],
-                        "leftShoulder": frame_data["pose"][11],
-                        "rightShoulder": frame_data["pose"][12]
-                    },
+                    "pose": pose_dict,
                     "scores": scores,
                     "frames": len(student_sequence)
                 })
@@ -512,6 +649,8 @@ async def evaluate_endpoint(websocket: WebSocket):
                     "hand": frame_data["hand"],
                     "right_hand": frame_data["right_hand"] if frame_data["has_right"] else None,
                     "left_hand": frame_data["left_hand"] if frame_data["has_left"] else None,
+                    "pose": pose_dict,
+                    "frames": len(student_sequence)
                 })
 
     except WebSocketDisconnect:
@@ -542,7 +681,7 @@ else:
 
 def run_api():
     print("Starting Desktop API on port 8001...")
-    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=8001, log_level="info", log_config=None)
 
 if __name__ == '__main__':
     # Check if user wants server-only mode (ideal for browser testing)
