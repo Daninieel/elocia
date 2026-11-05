@@ -23,6 +23,9 @@ interface StageGroupedAssignment {
   title: string;
   signNames?: string[];
   signCount: number;
+  attemptNumber: number;
+  totalStageAttempts: number;
+  totalAttempts?: number;
   avgScore: number;
   latestDate: string;
   isFlagged: boolean;
@@ -34,6 +37,7 @@ export default function ParentHomePage() {
     stageId: number;
     title: string;
     relativeStageNum?: number;
+    attemptNumber?: number;
   } | null>(null);
   const itemsPerPage = 5;
 
@@ -54,88 +58,128 @@ export default function ParentHomePage() {
     error,
   } = useParentDashboard();
 
-  // Group recent assignment scores by stage using culminating mastery per sign
+  // Group recent assignment scores into distinct Stage Playthrough Attempts
   const stageGroupedScores = useMemo<StageGroupedAssignment[]>(() => {
     if (!scores || scores.length === 0) return [];
 
-    const map = new Map<number, {
-      stageNum: number;
-      relativeStageNum: number;
-      stageId: number;
-      title: string;
-      signMap: Map<string, { score: number; date: string; name: string }>;
-      allScores: number[];
-      dates: string[];
-      hasFlag: boolean;
-    }>();
-
+    // 1. Group all raw attempts by stage number
+    const byStage: Record<number, any[]> = {};
     scores.forEach((s) => {
-      const stageNum = s.stage_id_new || s.stage_number || s.stage_id || 1;
-      const stageId = s.stage_id_new || s.stage_id || s.stage_number || 1;
-      const relStage = s.relative_stage_number || 1;
-      const secNum = s.section_number || (activeSectionIndex ?? 0) + 1;
-      const unitNum = s.unit_number || 1;
-      const title = s.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
-      const isFlag = s.tier_level === 4;
-      const signKey = `${s.sign_id || 1}`;
-      const signName = s.sign_name || `Sign ${s.sign_id}`;
+      const sNum = s.stage_id_new || s.stage_number || s.stage_id || 1;
+      if (!byStage[sNum]) byStage[sNum] = [];
+      byStage[sNum].push(s);
+    });
 
-      if (!map.has(stageNum)) {
-        const signMap = new Map<string, { score: number; date: string; name: string }>();
-        signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
-        map.set(stageNum, {
-          stageNum,
+    const attemptRows: StageGroupedAssignment[] = [];
+
+    // 2. For each stage, segment chronologically into Stage Attempts (Playthroughs)
+    Object.entries(byStage).forEach(([sNumStr, sAtts]) => {
+      const sortedAsc = [...sAtts].sort(
+        (a, b) => new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime()
+      );
+
+      const runs: any[][] = [];
+      let currentRun: any[] = [];
+      const seenSigns = new Set<string>();
+      let lastTime: number | null = null;
+
+      sortedAsc.forEach((att) => {
+        const signKey = `${att.sign_id || 1}`;
+        const attTime = new Date(att.created_at || "").getTime();
+        let isNewRun = false;
+
+        if (currentRun.length > 0) {
+          const diffSeconds = lastTime ? (attTime - lastTime) / 1000 : 0;
+          if (diffSeconds > 120) {
+            isNewRun = true;
+          } else if (seenSigns.has(signKey) && `${currentRun[currentRun.length - 1].sign_id || 1}` !== signKey) {
+            isNewRun = true;
+          }
+        }
+
+        if (isNewRun) {
+          runs.push(currentRun);
+          currentRun = [att];
+          seenSigns.clear();
+          seenSigns.add(signKey);
+        } else {
+          currentRun.push(att);
+          seenSigns.add(signKey);
+        }
+        lastTime = attTime;
+      });
+
+      if (currentRun.length > 0) {
+        runs.push(currentRun);
+      }
+
+      const totalStageAttempts = runs.length;
+
+      // 3. For each stage playthrough run, compute its culminating score and parameters:
+      runs.forEach((runAtts, runIndex) => {
+        const attemptNumber = runIndex + 1;
+        const rep = runAtts[runAtts.length - 1];
+        const sNum = Number(sNumStr);
+        const stageId = rep.stage_id_new || rep.stage_id || rep.stage_number || sNum;
+        const relStage = rep.relative_stage_number || 1;
+        const secNum = rep.section_number || (activeSectionIndex ?? 0) + 1;
+        const unitNum = rep.unit_number || 1;
+        const title = rep.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
+
+        // Group by sign within this run
+        const signMap = new Map<string, { name: string; attempts: any[] }>();
+        let isFlagged = false;
+        runAtts.forEach((att) => {
+          const sKey = `${att.sign_id || 1}`;
+          const sName = att.sign_name || `Sign ${att.sign_id}`;
+          if (!signMap.has(sKey)) {
+            signMap.set(sKey, { name: sName, attempts: [att] });
+          } else {
+            signMap.get(sKey)!.attempts.push(att);
+          }
+          if (att.tier_level === 4) isFlagged = true;
+        });
+
+        // Compute culminating score per sign
+        const recordedScores: number[] = [];
+        const signNames: string[] = [];
+        signMap.forEach(({ name, attempts }) => {
+          signNames.push(name);
+          const attsSorted = [...attempts].sort(
+            (a, b) => new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime()
+          );
+          const passedAtt = attsSorted.find((a) => a.passed && (!a.tier_level || a.tier_level < 4));
+          if (passedAtt) {
+            recordedScores.push(passedAtt.score_overall);
+          } else {
+            const lastAtt = attsSorted[attsSorted.length - 1];
+            if (lastAtt && typeof lastAtt.score_overall === "number") {
+              recordedScores.push(lastAtt.score_overall);
+            }
+          }
+        });
+
+        const avg = recordedScores.length > 0 ? recordedScores.reduce((a, b) => a + b, 0) / recordedScores.length : 0;
+        const latestDate = rep.created_at || runAtts[0].created_at || "";
+
+        attemptRows.push({
+          stageNum: sNum,
           relativeStageNum: relStage,
           stageId,
           title,
-          signMap,
-          allScores: [s.score_overall],
-          dates: s.created_at ? [s.created_at] : [],
-          hasFlag: isFlag,
+          signNames,
+          signCount: signMap.size,
+          attemptNumber,
+          totalStageAttempts,
+          totalAttempts: runAtts.length,
+          avgScore: Math.round(avg),
+          latestDate,
+          isFlagged,
         });
-      } else {
-        const item = map.get(stageNum)!;
-        if (s.created_at) item.dates.push(s.created_at);
-        if (isFlag) item.hasFlag = true;
-        item.allScores.push(s.score_overall);
-
-        if (!item.signMap.has(signKey)) {
-          item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
-        } else {
-          const existing = item.signMap.get(signKey)!;
-          if (new Date(s.created_at || "").getTime() > new Date(existing.date).getTime()) {
-            item.signMap.set(signKey, { score: s.score_overall, date: s.created_at || "", name: signName });
-          }
-        }
-      }
+      });
     });
 
-    return Array.from(map.values())
-      .map((item) => {
-        const culminatingItems = Array.from(item.signMap.values());
-        const signNames = culminatingItems.map((v: any) => v.name).filter(Boolean);
-        const allScores = item.allScores || [];
-        const avg =
-          allScores.length > 0
-            ? allScores.reduce((a: number, b: number) => a + b, 0) / allScores.length
-            : 0;
-        const sortedDates = item.dates.sort(
-          (a, b) => new Date(b).getTime() - new Date(a).getTime()
-        );
-        return {
-          stageNum: item.stageNum,
-          relativeStageNum: item.relativeStageNum,
-          stageId: item.stageId,
-          title: item.title,
-          signNames,
-          signCount: item.signMap.size,
-          totalAttempts: allScores.length,
-          avgScore: Math.round(avg),
-          latestDate: sortedDates[0] || "",
-          isFlagged: item.hasFlag,
-        };
-      })
-      .sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
+    return attemptRows.sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
   }, [scores, activeSectionIndex]);
 
   if (loading) {
@@ -537,6 +581,9 @@ export default function ParentHomePage() {
                                     <span className="font-bold text-gray-800 text-[15px]">
                                       {stageItem.title}
                                     </span>
+                                    <span className="rounded-lg bg-orange-100/70 border border-orange-200 px-2 py-0.5 text-xs font-bold text-orange-700">
+                                      Attempt {stageItem.attemptNumber}
+                                    </span>
                                     {stageItem.isFlagged && (
                                       <span
                                         className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse shrink-0"
@@ -567,7 +614,7 @@ export default function ParentHomePage() {
                             {/* Attempts Column */}
                             <td className="px-4 py-4.5 font-medium text-gray-600 text-sm">
                               <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-gray-100 text-xs font-semibold text-gray-700">
-                                {stageItem.totalAttempts || stageItem.signCount} {(stageItem.totalAttempts || stageItem.signCount) === 1 ? "attempt" : "attempts"}
+                                {stageItem.signCount} {stageItem.signCount === 1 ? "sign" : "signs"}
                               </span>
                             </td>
 
@@ -585,6 +632,7 @@ export default function ParentHomePage() {
                                     stageId: stageItem.stageId,
                                     title: stageItem.title,
                                     relativeStageNum: stageItem.relativeStageNum,
+                                    attemptNumber: stageItem.attemptNumber,
                                   })
                                 }
                                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-orange-200 bg-orange-50 text-xs font-bold text-[#FF8A00] hover:bg-[#FF8A00] hover:text-white transition-all shadow-xs"
@@ -678,6 +726,7 @@ export default function ParentHomePage() {
           stageId={selectedStageForAnalytics.stageId}
           stageTitle={selectedStageForAnalytics.title}
           relativeStageNum={selectedStageForAnalytics.relativeStageNum}
+          attemptNumber={selectedStageForAnalytics.attemptNumber}
           isOpen={true}
           onClose={() => setSelectedStageForAnalytics(null)}
         />

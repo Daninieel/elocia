@@ -236,11 +236,13 @@ _ACTIVE_FOCUS_DRILLS: dict = {}
 async def get_student_unit_analytics(
     student_id: uuid.UUID,
     stage_id: int = 1,
+    attempt_index: int = None,
     db: AsyncSession = Depends(get_db)
 ):
     """
     Returns detailed parameter mastery breakdown, needs practice signs,
     and performance trend for a specific student and stage/unit.
+    Supports attempt_index (1-based) to inspect specific Stage Playthrough Attempts.
     """
     stud_res = await db.execute(
         select(User, StudentProfile)
@@ -294,29 +296,112 @@ async def get_student_unit_analytics(
         if sid:
             sign_names[sid] = sname
 
-    # Group attempts by sign to inspect both culminating attempt and any Tier 4 struggle:
+    # Segment all evaluation attempts of this stage into distinct Stage Playthroughs (Attempt 1, Attempt 2, ..., Attempt N):
+    attempts_chrono = sorted(attempts, key=lambda x: (x.created_at, x.id))
+    stage_runs = []
+    current_run = []
+    seen_signs_in_run = set()
+    last_time = None
+
+    for a in attempts_chrono:
+        s_id = a.sign_id or 1
+        is_new_run = False
+        if current_run:
+            time_diff = (a.created_at - last_time).total_seconds() if last_time and hasattr(a.created_at - last_time, 'total_seconds') else 0
+            if time_diff > 120:
+                is_new_run = True
+            elif s_id in seen_signs_in_run and current_run[-1].sign_id != s_id:
+                is_new_run = True
+
+        if is_new_run:
+            stage_runs.append(current_run)
+            current_run = [a]
+            seen_signs_in_run = {s_id}
+        else:
+            current_run.append(a)
+            seen_signs_in_run.add(s_id)
+        last_time = a.created_at
+
+    if current_run:
+        stage_runs.append(current_run)
+
+    # Compute available attempts metadata across stage playthroughs
+    available_attempts = []
+    for idx, run_atts in enumerate(stage_runs):
+        run_signs = {}
+        has_t4_run = False
+        for a in run_atts:
+            sid = a.sign_id or 1
+            run_signs.setdefault(sid, []).append(a)
+        run_rec_scores = []
+        for sid, s_atts in run_signs.items():
+            t4 = next((a for a in s_atts if a.tier_level and a.tier_level >= 4), None)
+            passed = next((a for a in s_atts if a.passed and (a.tier_level or 1) < 4), None)
+            if t4:
+                has_t4_run = True
+            rec = passed if passed else (t4 if t4 else s_atts[-1])
+            if rec.score_overall is not None:
+                run_rec_scores.append(rec.score_overall)
+        run_avg = round(sum(run_rec_scores) / len(run_rec_scores), 1) if run_rec_scores else 0.0
+        available_attempts.append({
+            "attempt_number": idx + 1,
+            "score": run_avg,
+            "has_tier4": has_t4_run,
+            "date": str(run_atts[-1].created_at) if run_atts[-1].created_at else None,
+            "total_signs": len(run_signs),
+            "total_raw_tries": len(run_atts)
+        })
+
+    # Select the requested attempt run, or default to latest
+    if stage_runs:
+        if attempt_index is not None and 1 <= attempt_index <= len(stage_runs):
+            active_run_idx = attempt_index - 1
+        else:
+            active_run_idx = len(stage_runs) - 1
+        active_run = stage_runs[active_run_idx]
+        current_attempt_number = active_run_idx + 1
+    else:
+        active_run = attempts
+        current_attempt_number = 1
+
+    # Group attempts of this specific playthrough by sign
     attempts_by_sign = {}
-    for a in attempts:
+    for a in active_run:
         s_id = a.sign_id or a.stage_id or 1
         attempts_by_sign.setdefault(s_id, []).append(a)
 
-    latest_attempt_by_sign = {}
+    recorded_attempt_by_sign = {}
     tier4_attempt_by_sign = {}
-    for s_id, s_atts in attempts_by_sign.items():
-        latest_attempt_by_sign[s_id] = s_atts[0]  # First is latest because attempts is ordered by created_at.desc()
-        for a in s_atts:
-            if a.tier_level and a.tier_level >= 4:
-                tier4_attempt_by_sign[s_id] = a
-                break
 
-    # Calculate overall grade and parameter mastery divided by TOTAL attempts across this stage:
-    valid_attempts = [a for a in attempts if a.score_overall is not None and a.score_overall > 0]
-    if valid_attempts:
-        avg_handshape = round(sum((a.score_handshape or 0) for a in valid_attempts) / len(valid_attempts), 1)
-        avg_palm = round(sum((a.score_palm_orientation or 0) for a in valid_attempts) / len(valid_attempts), 1)
-        avg_location = round(sum((a.score_location or 0) for a in valid_attempts) / len(valid_attempts), 1)
-        avg_movement = round(sum((a.score_movement or 0) for a in valid_attempts) / len(valid_attempts), 1)
-        overall_score = round(sum((a.score_overall or 0) for a in valid_attempts) / len(valid_attempts), 1)
+    for s_id, round_atts in attempts_by_sign.items():
+        round_atts_chrono = sorted(round_atts, key=lambda x: (x.created_at, x.attempt_number or 0))
+        # Check for Tier 4 struggle attempt
+        t4_att = next((a for a in round_atts_chrono if a.tier_level and a.tier_level >= 4), None)
+        # Check for authentic passed attempt at normal tiers (Tier 1, 2, or 3)
+        passed_att = next((a for a in round_atts_chrono if a.passed and (a.tier_level or 1) < 4), None)
+
+        if passed_att:
+            # Rule 1: Passed attempt is recorded for that round (e.g. Attempt 3 at Tier 2)
+            recorded_attempt_by_sign[s_id] = passed_att
+        elif t4_att:
+            # Rule 2: If Tier 4, record the culminating last attempt with authentic MediaPipe scores
+            tier4_attempt_by_sign[s_id] = t4_att
+            recorded_attempt_by_sign[s_id] = t4_att
+        else:
+            # Incomplete or failed attempts without tier 4
+            last_att = round_atts_chrono[-1]
+            if last_att.tier_level and last_att.tier_level >= 4:
+                tier4_attempt_by_sign[s_id] = last_att
+            recorded_attempt_by_sign[s_id] = last_att
+
+    # Calculate overall grade and parameter mastery strictly from the RECORDED attempt of each sign in this stage:
+    rec_atts = [a for a in recorded_attempt_by_sign.values() if a and a.score_overall is not None]
+    if rec_atts:
+        avg_handshape = round(sum((a.score_handshape or 0) for a in rec_atts) / len(rec_atts), 1)
+        avg_palm = round(sum((a.score_palm_orientation or 0) for a in rec_atts) / len(rec_atts), 1)
+        avg_location = round(sum((a.score_location or 0) for a in rec_atts) / len(rec_atts), 1)
+        avg_movement = round(sum((a.score_movement or 0) for a in rec_atts) / len(rec_atts), 1)
+        overall_score = round(sum((a.score_overall or 0) for a in rec_atts) / len(rec_atts), 1)
     else:
         # Realistic default baseline if student has zero attempts
         avg_handshape = 88.0
@@ -419,25 +504,26 @@ async def get_student_unit_analytics(
         stage_baselines = stage_baselines_res.scalars().all()
 
     rounds_data = []
-    # If no stage_baselines found, build from latest_attempt_by_sign
+    # Build rounds from recorded attempts per sign
     if stage_baselines:
         for b in stage_baselines:
-            latest_att = latest_attempt_by_sign.get(b.sign_id)
-            has_t4 = b.sign_id in tier4_attempt_by_sign
-            if latest_att:
+            rec_att = recorded_attempt_by_sign.get(b.sign_id)
+            has_t4 = b.sign_id in tier4_attempt_by_sign or (rec_att and rec_att.tier_level and rec_att.tier_level >= 4)
+            is_passed = bool(rec_att and rec_att.passed and not has_t4 and (rec_att.tier_level or 1) < 4)
+            if rec_att:
                 rounds_data.append({
                     "sign_id": b.sign_id,
                     "sign_name": b.sign_name,
-                    "score_overall": round(latest_att.score_overall or 0.0, 1),
-                    "score_handshape": round(latest_att.score_handshape or 0.0, 1),
-                    "score_palm_orientation": round(latest_att.score_palm_orientation or 0.0, 1),
-                    "score_location": round(latest_att.score_location or 0.0, 1),
-                    "score_movement": round(latest_att.score_movement or 0.0, 1),
-                    "passed": bool(latest_att.passed),
-                    "tier_level": 4 if has_t4 else (latest_att.tier_level or 1),
-                    "has_tier4": has_t4,
-                    "attempt_number": latest_att.attempt_number or 1,
-                    "attempted_at": str(latest_att.created_at) if latest_att.created_at else None
+                    "score_overall": round(rec_att.score_overall or 0.0, 1),
+                    "score_handshape": round(rec_att.score_handshape or 0.0, 1),
+                    "score_palm_orientation": round(rec_att.score_palm_orientation or 0.0, 1),
+                    "score_location": round(rec_att.score_location or 0.0, 1),
+                    "score_movement": round(rec_att.score_movement or 0.0, 1),
+                    "passed": is_passed,
+                    "tier_level": 4 if has_t4 else (rec_att.tier_level or 1),
+                    "has_tier4": bool(has_t4),
+                    "attempt_number": rec_att.attempt_number or 1,
+                    "attempted_at": str(rec_att.created_at) if rec_att.created_at else None
                 })
             else:
                 rounds_data.append({
@@ -455,22 +541,23 @@ async def get_student_unit_analytics(
                     "attempted_at": None
                 })
     else:
-        for s_id, latest_att in latest_attempt_by_sign.items():
+        for s_id, rec_att in recorded_attempt_by_sign.items():
             name = sign_names.get(s_id, f"Sign {s_id}")
-            has_t4 = s_id in tier4_attempt_by_sign
+            has_t4 = s_id in tier4_attempt_by_sign or (rec_att and rec_att.tier_level and rec_att.tier_level >= 4)
+            is_passed = bool(rec_att and rec_att.passed and not has_t4 and (rec_att.tier_level or 1) < 4)
             rounds_data.append({
                 "sign_id": s_id,
                 "sign_name": name,
-                "score_overall": round(latest_att.score_overall or 0.0, 1),
-                "score_handshape": round(latest_att.score_handshape or 0.0, 1),
-                "score_palm_orientation": round(latest_att.score_palm_orientation or 0.0, 1),
-                "score_location": round(latest_att.score_location or 0.0, 1),
-                "score_movement": round(latest_att.score_movement or 0.0, 1),
-                "passed": bool(latest_att.passed),
-                "tier_level": 4 if has_t4 else (latest_att.tier_level or 1),
-                "has_tier4": has_t4,
-                "attempt_number": latest_att.attempt_number or 1,
-                "attempted_at": str(latest_att.created_at) if latest_att.created_at else None
+                "score_overall": round(rec_att.score_overall or 0.0, 1),
+                "score_handshape": round(rec_att.score_handshape or 0.0, 1),
+                "score_palm_orientation": round(rec_att.score_palm_orientation or 0.0, 1),
+                "score_location": round(rec_att.score_location or 0.0, 1),
+                "score_movement": round(rec_att.score_movement or 0.0, 1),
+                "passed": is_passed,
+                "tier_level": 4 if has_t4 else (rec_att.tier_level or 1),
+                "has_tier4": bool(has_t4),
+                "attempt_number": rec_att.attempt_number or 1,
+                "attempted_at": str(rec_att.created_at) if rec_att.created_at else None
             })
 
     return {
@@ -480,7 +567,10 @@ async def get_student_unit_analytics(
         "stage_number": curr_stage.stage_number if curr_stage else stage_id,
         "stage_title": curr_stage.title if curr_stage else None,
         "overall_score": overall_score,
-        "total_attempts": len(valid_attempts),
+        "total_attempts": len(attempts),
+        "current_attempt_number": current_attempt_number,
+        "total_stage_attempts": len(stage_runs),
+        "available_attempts": available_attempts,
         "parameter_mastery": parameter_mastery,
         "diagnostic_insight": diagnostic_insight,
         "needs_practice": needs_practice,

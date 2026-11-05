@@ -29,88 +29,148 @@ export default function TeacherStudentProfilePage() {
     stageId: number;
     title?: string;
     relativeStageNum?: number;
+    attemptNumber?: number;
   }>({ stageId: 1 });
   const [currentPage, setCurrentPage] = useState<number>(1);
   const itemsPerPage = 5;
   const streakMessage = getStreakMessage(student?.streak || 0);
 
-  // Group attempts by Stage so recent assignments shows stages instead of individual attempted signs
+  // Group attempts into distinct Stage Evaluation Attempts (Playthrough Sessions)
   const stageGroupedAssignments = (() => {
-    const stageMap: Record<number, {
+    // 1. Group all raw attempts by stage number
+    const byStage: Record<number, EvaluationAttemptItem[]> = {};
+    recentAttempts.forEach((attempt) => {
+      const sNum = attempt.stage_id_new || attempt.stage_number || attempt.stage_id || 1;
+      if (!byStage[sNum]) byStage[sNum] = [];
+      byStage[sNum].push(attempt);
+    });
+
+    const attemptRows: Array<{
       stageNum: number;
       relativeStageNum: number;
       stageId: number;
       title: string;
       unitNumber: number;
-      scores: number[];
-      allScores: number[];
+      attemptNumber: number;
+      totalStageAttempts: number;
       latestDate: string;
       isFlagged: boolean;
       roundsCount: number;
       totalAttempts: number;
       signNames: string[];
-    }> = {};
+      avgScore: number;
+    }> = [];
 
-    recentAttempts.forEach((attempt) => {
-      const sNum = attempt.stage_id_new || attempt.stage_number || attempt.stage_id || 1;
-      const stageId = attempt.stage_id_new || attempt.stage_id || attempt.stage_number || 1;
-      const relStage = attempt.relative_stage_number || 1;
-      const secNum = attempt.section_number || 1;
-      const unitNum = attempt.unit_number || 1;
-      const formattedTitle = attempt.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
+    // 2. For each stage, segment chronologically into Stage Attempts (Playthroughs)
+    Object.entries(byStage).forEach(([sNumStr, sAtts]) => {
+      const sortedAsc = [...sAtts].sort(
+        (a, b) => new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime()
+      );
 
-      const signKey = `${attempt.sign_id || 1}`;
-      const signName = attempt.sign_name || `Sign ${attempt.sign_id}`;
+      const runs: EvaluationAttemptItem[][] = [];
+      let currentRun: EvaluationAttemptItem[] = [];
+      const seenSigns = new Set<string>();
+      let lastTime: number | null = null;
 
-      if (!stageMap[sNum]) {
-        const signMap = new Map<string, { score: number; date: string; name: string }>();
-        signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
-        (stageMap as any)[sNum] = {
+      sortedAsc.forEach((att) => {
+        const signKey = `${att.sign_id || 1}`;
+        const attTime = new Date(att.created_at || "").getTime();
+        let isNewRun = false;
+
+        if (currentRun.length > 0) {
+          const diffSeconds = lastTime ? (attTime - lastTime) / 1000 : 0;
+          if (diffSeconds > 120) {
+            isNewRun = true;
+          } else if (seenSigns.has(signKey) && `${currentRun[currentRun.length - 1].sign_id || 1}` !== signKey) {
+            isNewRun = true;
+          }
+        }
+
+        if (isNewRun) {
+          runs.push(currentRun);
+          currentRun = [att];
+          seenSigns.clear();
+          seenSigns.add(signKey);
+        } else {
+          currentRun.push(att);
+          seenSigns.add(signKey);
+        }
+        lastTime = attTime;
+      });
+
+      if (currentRun.length > 0) {
+        runs.push(currentRun);
+      }
+
+      const totalStageAttempts = runs.length;
+
+      // 3. For each stage playthrough run, compute its culminating score and parameters:
+      runs.forEach((runAtts, runIndex) => {
+        const attemptNumber = runIndex + 1;
+        const rep = runAtts[runAtts.length - 1];
+        const sNum = Number(sNumStr);
+        const stageId = rep.stage_id_new || rep.stage_id || rep.stage_number || sNum;
+        const relStage = rep.relative_stage_number || 1;
+        const secNum = rep.section_number || 1;
+        const unitNum = rep.unit_number || 1;
+        const formattedTitle = rep.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
+
+        // Group by sign within this run
+        const signMap = new Map<string, { name: string; attempts: EvaluationAttemptItem[] }>();
+        let isFlagged = false;
+        runAtts.forEach((att) => {
+          const sKey = `${att.sign_id || 1}`;
+          const sName = att.sign_name || `Sign ${att.sign_id}`;
+          if (!signMap.has(sKey)) {
+            signMap.set(sKey, { name: sName, attempts: [att] });
+          } else {
+            signMap.get(sKey)!.attempts.push(att);
+          }
+          if (att.tier_level === 4) isFlagged = true;
+        });
+
+        // Compute culminating score per sign
+        const recordedScores: number[] = [];
+        const signNames: string[] = [];
+        signMap.forEach(({ name, attempts }) => {
+          signNames.push(name);
+          const attsSorted = [...attempts].sort(
+            (a, b) => new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime()
+          );
+          const passedAtt = attsSorted.find((a) => a.passed && (!a.tier_level || a.tier_level < 4));
+          if (passedAtt) {
+            recordedScores.push(passedAtt.score_overall);
+          } else {
+            const lastAtt = attsSorted[attsSorted.length - 1];
+            if (lastAtt && typeof lastAtt.score_overall === "number") {
+              recordedScores.push(lastAtt.score_overall);
+            }
+          }
+        });
+
+        const avg = recordedScores.length > 0 ? recordedScores.reduce((a, b) => a + b, 0) / recordedScores.length : 0;
+        const latestDate = rep.created_at || runAtts[0].created_at || "";
+
+        attemptRows.push({
           stageNum: sNum,
           relativeStageNum: relStage,
           stageId,
           title: formattedTitle,
           unitNumber: unitNum,
-          signMap,
-          allScores: [attempt.score_overall],
-          latestDate: attempt.created_at || "",
-          isFlagged: false,
-          roundsCount: 0,
-          totalAttempts: 1,
-        };
-      } else {
-        (stageMap as any)[sNum].allScores.push(attempt.score_overall);
-        const signMap = (stageMap as any)[sNum].signMap;
-        if (!signMap.has(signKey)) {
-          signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
-        } else {
-          const existing = signMap.get(signKey)!;
-          if (new Date(attempt.created_at || "").getTime() > new Date(existing.date).getTime()) {
-            signMap.set(signKey, { score: attempt.score_overall, date: attempt.created_at || "", name: signName });
-          }
-        }
-      }
-      (stageMap as any)[sNum].roundsCount = (stageMap as any)[sNum].signMap.size;
-      (stageMap as any)[sNum].totalAttempts = (stageMap as any)[sNum].allScores.length;
-      if (attempt.tier_level === 4) {
-        stageMap[sNum].isFlagged = true;
-      }
-      if (attempt.created_at && (!stageMap[sNum].latestDate || new Date(attempt.created_at) > new Date(stageMap[sNum].latestDate))) {
-        stageMap[sNum].latestDate = attempt.created_at;
-      }
+          attemptNumber,
+          totalStageAttempts,
+          latestDate,
+          isFlagged,
+          roundsCount: signMap.size,
+          totalAttempts: runAtts.length,
+          signNames,
+          avgScore: Math.round(avg),
+        });
+      });
     });
 
-    return Object.values(stageMap).map((item: any) => {
-      const culminatingItems = Array.from((item.signMap as Map<string, { score: number; name: string }>).values());
-      const signNames = culminatingItems.map(v => v.name).filter(Boolean);
-      const allScores = (item.allScores as number[]) || [];
-      const avg = allScores.length > 0 ? allScores.reduce((a, b) => a + b, 0) / allScores.length : 0;
-      return {
-        ...item,
-        signNames,
-        avgScore: Math.round(avg),
-      };
-    }).sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
+    // Sort by latest attempt date descending
+    return attemptRows.sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
   })();
 
   useEffect(() => {
@@ -327,8 +387,8 @@ export default function TeacherStudentProfilePage() {
                                   <span className="font-bold text-gray-800 text-[15px]">
                                     {stageGroup.title}
                                   </span>
-                                  <span className="rounded-lg bg-orange-100/60 px-2 py-0.5 text-xs font-semibold text-orange-700">
-                                    {stageGroup.totalAttempts || stageGroup.roundsCount} {(stageGroup.totalAttempts || stageGroup.roundsCount) === 1 ? "attempt" : "attempts"}
+                                  <span className="rounded-lg bg-orange-100/70 border border-orange-200 px-2 py-0.5 text-xs font-bold text-orange-700">
+                                    Attempt {stageGroup.attemptNumber}
                                   </span>
                                   {stageGroup.isFlagged && (
                                     <span
@@ -374,6 +434,7 @@ export default function TeacherStudentProfilePage() {
                                   stageId: stageGroup.stageId || stageGroup.stageNum,
                                   title: stageGroup.title,
                                   relativeStageNum: stageGroup.relativeStageNum,
+                                  attemptNumber: stageGroup.attemptNumber,
                                 });
                                 setIsAnalyticsOpen(true);
                               }}
@@ -468,6 +529,7 @@ export default function TeacherStudentProfilePage() {
           stageId={selectedStage.stageId}
           stageTitle={selectedStage.title}
           relativeStageNum={selectedStage.relativeStageNum}
+          attemptNumber={selectedStage.attemptNumber}
           isOpen={isAnalyticsOpen}
           onClose={() => setIsAnalyticsOpen(false)}
         />

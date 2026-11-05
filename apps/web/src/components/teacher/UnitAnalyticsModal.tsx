@@ -7,8 +7,18 @@ interface UnitAnalyticsModalProps {
   stageId: number;
   stageTitle?: string;
   relativeStageNum?: number;
+  attemptNumber?: number;
   isOpen: boolean;
   onClose: () => void;
+}
+
+interface AvailableAttemptItem {
+  attempt_number: number;
+  score: number;
+  has_tier4: boolean;
+  date: string | null;
+  total_signs: number;
+  total_raw_tries: number;
 }
 
 interface ParameterItem {
@@ -54,6 +64,7 @@ export default function UnitAnalyticsModal({
   stageId,
   stageTitle,
   relativeStageNum,
+  attemptNumber,
   isOpen,
   onClose,
 }: UnitAnalyticsModalProps) {
@@ -69,9 +80,16 @@ export default function UnitAnalyticsModal({
   const [rounds, setRounds] = useState<RoundItem[]>([]);
   const [selectedRound, setSelectedRound] = useState<RoundItem | null>(null);
   const [overallScore, setOverallScore] = useState<number>(78);
-  const [totalAttempts, setTotalAttempts] = useState<number>(0);
   const [drillSuccess, setDrillSuccess] = useState<boolean>(false);
   const [isCreatingDrill, setIsCreatingDrill] = useState<boolean>(false);
+  const [availableAttempts, setAvailableAttempts] = useState<AvailableAttemptItem[]>([]);
+  const [activeAttemptNum, setActiveAttemptNum] = useState<number>(attemptNumber || 1);
+
+  useEffect(() => {
+    if (attemptNumber) {
+      setActiveAttemptNum(attemptNumber);
+    }
+  }, [attemptNumber, stageId]);
 
   useEffect(() => {
     if (!isOpen || !studentId) return;
@@ -80,7 +98,8 @@ export default function UnitAnalyticsModal({
     setDrillSuccess(false);
     setSelectedRound(null);
 
-    fetch(`http://localhost:8000/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}`)
+    const attemptQuery = activeAttemptNum ? `&attempt_index=${activeAttemptNum}` : "";
+    fetch(`http://localhost:8000/analytics/students/${studentId}/unit-analytics?stage_id=${stageId}${attemptQuery}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load unit analytics");
         return res.json();
@@ -91,8 +110,11 @@ export default function UnitAnalyticsModal({
         setNeedsPractice(data.needs_practice || []);
         setTrend(data.performance_trend || []);
         setOverallScore(data.overall_score || 78);
-        setTotalAttempts(data.total_attempts || (data.rounds ? data.rounds.length : 0));
         setRounds(data.rounds || []);
+        setAvailableAttempts(data.available_attempts || []);
+        if (data.current_attempt_number && !attemptNumber) {
+          setActiveAttemptNum(data.current_attempt_number);
+        }
       })
       .catch((err) => {
         console.warn("Using fallback analytics data:", err);
@@ -123,7 +145,7 @@ export default function UnitAnalyticsModal({
         ]);
       })
       .finally(() => setLoading(false));
-  }, [isOpen, studentId, stageId]);
+  }, [isOpen, studentId, stageId, activeAttemptNum]);
 
   const handleCreateFocusDrill = async () => {
     setIsCreatingDrill(true);
@@ -172,9 +194,28 @@ export default function UnitAnalyticsModal({
                 <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-700">
                   {studentName}
                 </span>
+                {availableAttempts.length > 1 && (
+                  <div className="flex items-center gap-1 bg-orange-100/70 p-1 rounded-xl border border-orange-200">
+                    <span className="text-[10px] font-extrabold text-orange-800 px-1 hidden md:inline">Attempt:</span>
+                    {availableAttempts.map((att) => (
+                      <button
+                        key={att.attempt_number}
+                        type="button"
+                        onClick={() => setActiveAttemptNum(att.attempt_number)}
+                        className={`px-2 py-0.5 rounded-lg text-xs font-black transition-all cursor-pointer ${
+                          activeAttemptNum === att.attempt_number
+                            ? "bg-white text-[#FF8A00] shadow-xs"
+                            : "text-orange-700/80 hover:text-orange-950 hover:bg-white/50"
+                        }`}
+                      >
+                        #{att.attempt_number} ({Math.round(att.score)}%)
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <p className="text-xs font-medium text-gray-500 mt-0.5 hidden sm:block">
-                {stageTitle || `Detailed 4-parameter signing diagnosis for Stage ${displayStageNumber}`}
+                {stageTitle || `Detailed 4-parameter signing diagnosis for Stage ${displayStageNumber}`} • Attempt {activeAttemptNum} of {availableAttempts.length || 1}
               </p>
             </div>
           </div>
@@ -230,8 +271,8 @@ export default function UnitAnalyticsModal({
                     <span className="text-base font-extrabold text-gray-900 tracking-tight">
                       Stage Rounds & Attempts
                     </span>
-                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-bold text-orange-700">
-                      {rounds.length} {rounds.length === 1 ? "Sign" : "Signs"} ({totalAttempts || rounds.length} {(totalAttempts || rounds.length) === 1 ? "attempt" : "attempts"})
+                    <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-700">
+                      {rounds.length} {rounds.length === 1 ? "Sign" : "Signs"} • Attempt {activeAttemptNum} of {availableAttempts.length || 1}
                     </span>
                   </div>
                   {selectedRound && (
@@ -263,7 +304,7 @@ export default function UnitAnalyticsModal({
                             isSelected
                               ? "border-[#FF8A00] bg-orange-50/80 shadow-sm scale-102 ring-2 ring-orange-200"
                               : isAttempted
-                              ? r.passed
+                              ? r.passed && !r.has_tier4 && r.tier_level !== 4
                                 ? "border-emerald-200 bg-emerald-50/40 hover:border-emerald-300"
                                 : "border-rose-200 bg-rose-50/40 hover:border-rose-300"
                               : "border-gray-200 bg-gray-50/50 hover:border-gray-300"
@@ -279,7 +320,7 @@ export default function UnitAnalyticsModal({
                             <span
                               className={`rounded-full px-2 py-0.5 text-[10px] font-extrabold ${
                                 isAttempted
-                                  ? r.passed
+                                  ? r.passed && !r.has_tier4 && r.tier_level !== 4
                                     ? "bg-emerald-100 text-emerald-700"
                                     : "bg-rose-100 text-rose-700"
                                   : "bg-gray-100 text-gray-400"
