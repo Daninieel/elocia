@@ -1,11 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, Fragment } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { useGetStudentById } from "@/hooks/useStudents";
 
 import { fetchStudentScores } from "@/services/parent-progress";
 
-import { ArrowLeft, Flame, ChevronLeft, ChevronRight } from "lucide-react";
+import { ArrowLeft, Flame, ChevronLeft, ChevronRight, ChevronDown, ChevronUp } from "lucide-react";
 
 import { getStreakMessage } from "@/helpers/streak";
 
@@ -32,42 +32,67 @@ export default function TeacherStudentProfilePage() {
     attemptNumber?: number;
   }>({ stageId: 1 });
   const [currentPage, setCurrentPage] = useState<number>(1);
+  const [expandedStages, setExpandedStages] = useState<Set<string>>(new Set());
   const itemsPerPage = 5;
   const streakMessage = getStreakMessage(student?.streak || 0);
 
+  const toggleExpandStage = (stageKey: string) => {
+    setExpandedStages((prev) => {
+      const next = new Set(prev);
+      if (next.has(stageKey)) {
+        next.delete(stageKey);
+      } else {
+        next.add(stageKey);
+      }
+      return next;
+    });
+  };
+
   // Group attempts into distinct Stage Evaluation Attempts (Playthrough Sessions)
   const stageGroupedAssignments = (() => {
-    // 1. Group all raw attempts by stage number
-    const byStage: Record<number, EvaluationAttemptItem[]> = {};
+    // 1. Group all raw attempts by normalized stage key (avoiding stage_id vs stage_id_new duplicate split)
+    const byStage: Record<string, EvaluationAttemptItem[]> = {};
     recentAttempts.forEach((attempt) => {
-      const sNum = attempt.stage_id_new || attempt.stage_number || attempt.stage_id || 1;
-      if (!byStage[sNum]) byStage[sNum] = [];
-      byStage[sNum].push(attempt);
+      const sec = attempt.section_number || 1;
+      const unit = attempt.unit_number || 1;
+      const rel = attempt.relative_stage_number || 1;
+      const key = attempt.assignment_name || `Section ${sec}, Unit ${unit}, Stage ${rel}`;
+      if (!byStage[key]) byStage[key] = [];
+      byStage[key].push(attempt);
     });
 
-    const attemptRows: Array<{
+    const consolidatedStages: Array<{
+      stageKey: string;
       stageNum: number;
       relativeStageNum: number;
       stageId: number;
       title: string;
       unitNumber: number;
-      attemptNumber: number;
+      sectionNumber: number;
       totalStageAttempts: number;
       latestDate: string;
-      isFlagged: boolean;
-      roundsCount: number;
-      totalAttempts: number;
-      signNames: string[];
       avgScore: number;
+      bestScore: number;
+      isFlagged: boolean;
+      signNames: string[];
+      runs: Array<{
+        attemptNumber: number;
+        latestDate: string;
+        isFlagged: boolean;
+        roundsCount: number;
+        totalAttempts: number;
+        signNames: string[];
+        avgScore: number;
+      }>;
     }> = [];
 
     // 2. For each stage, segment chronologically into Stage Attempts (Playthroughs)
-    Object.entries(byStage).forEach(([sNumStr, sAtts]) => {
+    Object.entries(byStage).forEach(([stageKey, sAtts]) => {
       const sortedAsc = [...sAtts].sort(
         (a, b) => new Date(a.created_at || "").getTime() - new Date(b.created_at || "").getTime()
       );
 
-      const runs: EvaluationAttemptItem[][] = [];
+      const rawRuns: EvaluationAttemptItem[][] = [];
       let currentRun: EvaluationAttemptItem[] = [];
       const seenSigns = new Set<string>();
       let lastTime: number | null = null;
@@ -87,7 +112,7 @@ export default function TeacherStudentProfilePage() {
         }
 
         if (isNewRun) {
-          runs.push(currentRun);
+          rawRuns.push(currentRun);
           currentRun = [att];
           seenSigns.clear();
           seenSigns.add(signKey);
@@ -99,25 +124,27 @@ export default function TeacherStudentProfilePage() {
       });
 
       if (currentRun.length > 0) {
-        runs.push(currentRun);
+        rawRuns.push(currentRun);
       }
 
-      const totalStageAttempts = runs.length;
+      // Compute culminating score and details per playthrough run
+      const runs: Array<{
+        attemptNumber: number;
+        latestDate: string;
+        isFlagged: boolean;
+        roundsCount: number;
+        totalAttempts: number;
+        signNames: string[];
+        avgScore: number;
+      }> = [];
+      let stageHasFlag = false;
+      const allStageSigns = new Set<string>();
 
-      // 3. For each stage playthrough run, compute its culminating score and parameters:
-      runs.forEach((runAtts, runIndex) => {
+      rawRuns.forEach((runAtts, runIndex) => {
         const attemptNumber = runIndex + 1;
-        const rep = runAtts[runAtts.length - 1];
-        const sNum = Number(sNumStr);
-        const stageId = rep.stage_id_new || rep.stage_id || rep.stage_number || sNum;
-        const relStage = rep.relative_stage_number || 1;
-        const secNum = rep.section_number || 1;
-        const unitNum = rep.unit_number || 1;
-        const formattedTitle = rep.assignment_name || `Section ${secNum}, Unit ${unitNum}, Stage ${relStage}`;
-
-        // Group by sign within this run
         const signMap = new Map<string, { name: string; attempts: EvaluationAttemptItem[] }>();
-        let isFlagged = false;
+        let runFlagged = false;
+
         runAtts.forEach((att) => {
           const sKey = `${att.sign_id || 1}`;
           const sName = att.sign_name || `Sign ${att.sign_id}`;
@@ -126,7 +153,11 @@ export default function TeacherStudentProfilePage() {
           } else {
             signMap.get(sKey)!.attempts.push(att);
           }
-          if (att.tier_level === 4) isFlagged = true;
+          if (att.tier_level === 4) {
+            runFlagged = true;
+            stageHasFlag = true;
+          }
+          allStageSigns.add(sName);
         });
 
         // Compute culminating score per sign
@@ -149,28 +180,61 @@ export default function TeacherStudentProfilePage() {
         });
 
         const avg = recordedScores.length > 0 ? recordedScores.reduce((a, b) => a + b, 0) / recordedScores.length : 0;
-        const latestDate = rep.created_at || runAtts[0].created_at || "";
+        const latestDate = runAtts[runAtts.length - 1].created_at || runAtts[0].created_at || "";
 
-        attemptRows.push({
-          stageNum: sNum,
-          relativeStageNum: relStage,
-          stageId,
-          title: formattedTitle,
-          unitNumber: unitNum,
+        runs.push({
           attemptNumber,
-          totalStageAttempts,
           latestDate,
-          isFlagged,
+          isFlagged: runFlagged,
           roundsCount: signMap.size,
           totalAttempts: runAtts.length,
           signNames,
           avgScore: Math.round(avg),
         });
       });
+
+      // Sort runs descending (Attempt 3 first, then 2, then 1)
+      const sortedRuns = [...runs].sort((a, b) => b.attemptNumber - a.attemptNumber);
+      const latestRun = sortedRuns[0] || { latestDate: "", avgScore: 0, signNames: [] };
+      const bestScore = runs.length > 0 ? Math.max(...runs.map((r) => r.avgScore)) : 0;
+
+      const rep = sortedAsc[sortedAsc.length - 1];
+      const stageNum = rep.stage_id_new || rep.stage_id || rep.stage_number || 1;
+      const stageId = rep.stage_id_new || rep.stage_id || rep.stage_number || 1;
+      const relStage = rep.relative_stage_number || 1;
+      // Compute the true average score across all stage playthrough runs:
+      const stageAvg = runs.length > 0
+        ? Math.round(runs.reduce((acc, r) => acc + r.avgScore, 0) / runs.length)
+        : 0;
+
+      const secNum = rep.section_number || 1;
+      const unitNum = rep.unit_number || 1;
+
+      consolidatedStages.push({
+        stageKey,
+        stageNum,
+        relativeStageNum: relStage,
+        stageId,
+        title: stageKey,
+        unitNumber: unitNum,
+        sectionNumber: secNum,
+        totalStageAttempts: runs.length,
+        latestDate: latestRun.latestDate,
+        avgScore: stageAvg,
+        bestScore,
+        isFlagged: stageHasFlag,
+        signNames: Array.from(allStageSigns),
+        runs: sortedRuns,
+      });
     });
 
-    // Sort by latest attempt date descending
-    return attemptRows.sort((a, b) => new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime());
+    // Sort by Section number descending (Section 4, Section 3, Section 2, Section 1)
+    return consolidatedStages.sort((a, b) => {
+      if (b.sectionNumber !== a.sectionNumber) {
+        return b.sectionNumber - a.sectionNumber;
+      }
+      return new Date(b.latestDate).getTime() - new Date(a.latestDate).getTime();
+    });
   })();
 
   useEffect(() => {
@@ -356,10 +420,13 @@ export default function TeacherStudentProfilePage() {
                 <thead>
                   <tr className="text-left border-b border-gray-100">
                     <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">
-                      ASSIGNMENT NAME
+                      STAGE / ASSIGNMENT
                     </th>
                     <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">
                       DATE
+                    </th>
+                    <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">
+                      ATTEMPTS
                     </th>
                     <th className="px-4 py-3 text-[11px] font-bold uppercase tracking-wider text-gray-400">
                       SCORE
@@ -374,76 +441,163 @@ export default function TeacherStudentProfilePage() {
                   {stageGroupedAssignments
                     .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
                     .map((stageGroup, index) => {
+                      const isExpanded = expandedStages.has(stageGroup.stageKey);
                       return (
-                        <tr key={stageGroup.stageNum || index} className="hover:bg-gray-50/60 transition-colors border-b border-gray-50 last:border-b-0">
-                          {/* Assignment Name Column */}
-                          <td className="border-b border-gray-100 px-4 py-4.5">
-                            <div className="flex items-center gap-3.5">
-                              <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#FFF4E5] font-extrabold text-sm text-[#FF8A00] shadow-2xs">
-                                {stageGroup.relativeStageNum}
-                              </span>
-                              <div className="flex flex-col">
-                                <div className="flex items-center gap-2">
-                                  <span className="font-bold text-gray-800 text-[15px]">
-                                    {stageGroup.title}
-                                  </span>
-                                  <span className="rounded-lg bg-orange-100/70 border border-orange-200 px-2 py-0.5 text-xs font-bold text-orange-700">
-                                    Attempt {stageGroup.attemptNumber}
-                                  </span>
-                                  {stageGroup.isFlagged && (
-                                    <span
-                                      className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse"
-                                      title="Flagged (Tier 4 / Needs Focus)"
-                                    />
+                        <Fragment key={stageGroup.stageKey || index}>
+                          <tr className="hover:bg-gray-50/60 transition-colors border-b border-gray-50">
+                            {/* Assignment Name Column */}
+                            <td className="border-b border-gray-100 px-4 py-4.5">
+                              <div className="flex items-center gap-3.5">
+                                <span className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#FFF4E5] font-extrabold text-sm text-[#FF8A00] shadow-2xs">
+                                  {stageGroup.relativeStageNum}
+                                </span>
+                                <div className="flex flex-col">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-bold text-gray-800 text-[15px]">
+                                      {stageGroup.title}
+                                    </span>
+                                    {stageGroup.isFlagged && (
+                                      <span
+                                        className="flex h-2.5 w-2.5 rounded-full bg-rose-500 ring-2 ring-rose-200 animate-pulse"
+                                        title="Flagged (Tier 4 / Needs Focus)"
+                                      />
+                                    )}
+                                  </div>
+                                  {stageGroup.signNames && stageGroup.signNames.length > 0 && (
+                                    <span className="text-xs text-gray-500 font-medium mt-0.5">
+                                      Signs: {stageGroup.signNames.join(", ")}
+                                    </span>
                                   )}
                                 </div>
-                                {stageGroup.signNames && stageGroup.signNames.length > 0 && (
-                                  <span className="text-xs text-gray-500 font-medium mt-0.5">
-                                    Signs: {stageGroup.signNames.join(", ")}
-                                  </span>
-                                )}
                               </div>
-                            </div>
-                          </td>
+                            </td>
 
-                          {/* Date Column: formatted like "Oct 12, 2023" */}
-                          <td className="border-b border-gray-100 px-4 py-4.5 font-medium text-gray-400 text-sm">
-                            {stageGroup.latestDate
-                              ? new Date(stageGroup.latestDate).toLocaleDateString(
-                                  "en-US",
-                                  {
-                                    month: "short",
-                                    day: "numeric",
-                                    year: "numeric",
-                                  }
-                                )
-                              : "Recent"}
-                          </td>
+                            {/* Date Column: formatted like "Oct 27, 2026" */}
+                            <td className="border-b border-gray-100 px-4 py-4.5 font-medium text-gray-400 text-sm">
+                              {stageGroup.latestDate
+                                ? new Date(stageGroup.latestDate).toLocaleDateString(
+                                    "en-US",
+                                    {
+                                      month: "short",
+                                      day: "numeric",
+                                      year: "numeric",
+                                    }
+                                  )
+                                : "Recent"}
+                            </td>
 
-                          {/* Score Column: formatted like "75%" */}
-                          <td className="border-b border-gray-100 px-4 py-4.5 font-extrabold text-gray-800 text-sm">
-                            {stageGroup.avgScore}%
-                          </td>
+                            {/* Attempts Column: clickable badge showing playthrough count */}
+                            <td className="border-b border-gray-100 px-4 py-4.5">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandStage(stageGroup.stageKey)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer bg-orange-100/70 border border-orange-200 text-orange-800 hover:bg-orange-200/80 shadow-2xs"
+                                title="Click to view all attempt playthroughs"
+                              >
+                                <span>
+                                  {stageGroup.totalStageAttempts}{" "}
+                                  {stageGroup.totalStageAttempts === 1 ? "attempt" : "attempts"}
+                                </span>
+                                {isExpanded ? (
+                                  <ChevronUp className="size-3 text-orange-700" />
+                                ) : (
+                                  <ChevronDown className="size-3 text-orange-700" />
+                                )}
+                              </button>
+                            </td>
 
-                          {/* Actions: Analytics button */}
-                          <td className="border-b border-gray-100 px-4 py-4.5 text-right">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedStage({
-                                  stageId: stageGroup.stageId || stageGroup.stageNum,
-                                  title: stageGroup.title,
-                                  relativeStageNum: stageGroup.relativeStageNum,
-                                  attemptNumber: stageGroup.attemptNumber,
-                                });
-                                setIsAnalyticsOpen(true);
-                              }}
-                              className="inline-flex items-center gap-1 rounded-xl bg-orange-50 px-3 py-1.5 text-xs font-bold text-[#FF8A00] border border-orange-200 hover:bg-[#FF8A00] hover:text-white transition-all shadow-2xs cursor-pointer"
-                            >
-                              <span>Analytics</span>
-                            </button>
-                          </td>
-                        </tr>
+                            {/* Score Column: formatted like "80%" */}
+                            <td className="border-b border-gray-100 px-4 py-4.5 font-extrabold text-gray-800 text-sm">
+                              {stageGroup.avgScore}%
+                            </td>
+
+                            {/* Actions: Analytics button */}
+                            <td className="border-b border-gray-100 px-4 py-4.5 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSelectedStage({
+                                    stageId: stageGroup.stageId || stageGroup.stageNum,
+                                    title: stageGroup.title,
+                                    relativeStageNum: stageGroup.relativeStageNum,
+                                    attemptNumber: stageGroup.runs[0]?.attemptNumber || 1,
+                                  });
+                                  setIsAnalyticsOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 rounded-xl bg-orange-50 px-3 py-1.5 text-xs font-bold text-[#FF8A00] border border-orange-200 hover:bg-[#FF8A00] hover:text-white transition-all shadow-2xs cursor-pointer"
+                              >
+                                <span>Analytics</span>
+                              </button>
+                            </td>
+                          </tr>
+
+                          {/* Expanded Attempt History Sub-Rows */}
+                          {isExpanded && (
+                            <tr className="bg-orange-50/25 border-b border-orange-100/60">
+                              <td colSpan={5} className="px-6 py-3.5">
+                                <div className="flex flex-col gap-2 pl-11 pr-2">
+                                  <div className="flex items-center justify-between text-[11px] font-bold text-gray-400 uppercase tracking-wider">
+                                    <span>Attempt Playthrough History</span>
+                                    <span>Individual Score & Analytics</span>
+                                  </div>
+                                  <div className="flex flex-col divide-y divide-orange-100/60 rounded-xl bg-white border border-orange-200/70 shadow-2xs overflow-hidden">
+                                    {stageGroup.runs.map((run) => (
+                                      <div
+                                        key={run.attemptNumber}
+                                        className="flex items-center justify-between px-4 py-2.5 hover:bg-orange-50/30 transition-colors"
+                                      >
+                                        <div className="flex items-center gap-3">
+                                          <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold bg-[#FFF4E5] text-[#FF8A00] border border-orange-200/80">
+                                            Attempt {run.attemptNumber}
+                                          </span>
+                                          <span className="text-xs text-gray-500 font-medium">
+                                            {run.latestDate
+                                              ? new Date(run.latestDate).toLocaleDateString(
+                                                  "en-US",
+                                                  {
+                                                    month: "short",
+                                                    day: "numeric",
+                                                    year: "numeric",
+                                                    hour: "2-digit",
+                                                    minute: "2-digit",
+                                                  }
+                                                )
+                                              : "Recent"}
+                                          </span>
+                                          {run.isFlagged && (
+                                            <span className="text-[11px] font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-full border border-rose-200">
+                                              Tier 4 Flagged
+                                            </span>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                          <span className="font-extrabold text-sm text-gray-800">
+                                            {run.avgScore}%
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedStage({
+                                                stageId: stageGroup.stageId || stageGroup.stageNum,
+                                                title: stageGroup.title,
+                                                relativeStageNum: stageGroup.relativeStageNum,
+                                                attemptNumber: run.attemptNumber,
+                                              });
+                                              setIsAnalyticsOpen(true);
+                                            }}
+                                            className="px-2.5 py-1 text-xs font-bold text-[#FF8A00] bg-orange-50 border border-orange-200 rounded-lg hover:bg-[#FF8A00] hover:text-white transition-all cursor-pointer"
+                                          >
+                                            View Attempt {run.attemptNumber}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       );
                     })}
                 </tbody>
