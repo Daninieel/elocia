@@ -1,15 +1,16 @@
-import { useState, useRef, type DragEvent } from "react";
+import { useState, useRef } from "react";
 import {
   UploadCloud,
   X,
   Loader2,
   Zap,
   CheckCircle2,
-  AlertCircle,
   ImagePlus,
   ArrowUp,
   ArrowDown,
-  Video,
+  Copy,
+  Flag,
+  Upload,
   Plus,
 } from "lucide-react";
 import Button from "@/components/Button";
@@ -42,8 +43,8 @@ export default function BatchAddSignsDialog({
   const [isOpen, setIsOpen] = useState(false);
   const [items, setItems] = useState<StagedSignItem[]>([]);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [currentIndex, setCurrentIndex] = useState(-1);
-  const [isDragOver, setIsDragOver] = useState(false);
   const [uploadError, setUploadError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -52,10 +53,12 @@ export default function BatchAddSignsDialog({
     return raw.charAt(0).toUpperCase() + raw.slice(1);
   };
 
-  const handleAddFiles = (fileList: FileList | File[]) => {
+  const handleBatchVideoDrop = (files: File[]) => {
+    if (files.length === 0) return;
     const newItems: StagedSignItem[] = [];
-    for (let i = 0; i < fileList.length; i++) {
-      const file = fileList[i];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
       const ext = file.name.split(".").pop()?.toLowerCase();
       if (!["mp4", "webm", "mov", "mkv"].includes(ext || "")) continue;
 
@@ -73,19 +76,17 @@ export default function BatchAddSignsDialog({
     }
 
     if (newItems.length > 0) {
-      setItems((prev) => [...prev, ...newItems]);
+      setItems((prev) => {
+        // If there was only 1 empty item, replace it
+        const hasOnlyEmptyFirst =
+          prev.length === 1 && !prev[0].signName && !prev[0].videoPreviewUrl;
+        const baseItems = hasOnlyEmptyFirst ? [] : prev;
+        return [...baseItems, ...newItems];
+      });
     }
   };
 
-  const handleDrop = (e: DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    setIsDragOver(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleAddFiles(e.dataTransfer.files);
-    }
-  };
-
-  const addBlankSign = () => {
+  const addRound = () => {
     setItems((prev) => [
       ...prev,
       {
@@ -101,13 +102,22 @@ export default function BatchAddSignsDialog({
     ]);
   };
 
-  const updateItem = (id: string, updates: Partial<StagedSignItem>) => {
-    setItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, ...updates } : item))
-    );
+  const duplicateRound = (index: number) => {
+    setItems((prev) => {
+      const source = prev[index];
+      const cloned: StagedSignItem = {
+        ...source,
+        id: `${source.signName}-copy-${Date.now()}`,
+        status: "pending",
+        progress: 0,
+      };
+      const updated = [...prev];
+      updated.splice(index + 1, 0, cloned);
+      return updated;
+    });
   };
 
-  const moveSign = (index: number, direction: "up" | "down") => {
+  const moveRound = (index: number, direction: "up" | "down") => {
     setItems((prev) => {
       const targetIndex = direction === "up" ? index - 1 : index + 1;
       if (targetIndex < 0 || targetIndex >= prev.length) return prev;
@@ -119,43 +129,52 @@ export default function BatchAddSignsDialog({
     });
   };
 
-  const removeItem = (id: string) => {
+  const deleteRound = (index: number) => {
     if (isUploading) return;
-    setItems((prev) => prev.filter((item) => item.id !== id));
+    setItems((prev) => prev.filter((_, itemIndex) => itemIndex !== index));
   };
 
-  const handleSignVideoChange = (id: string, file: File) => {
-    const videoPreviewUrl = URL.createObjectURL(file);
+  const updateItem = (index: number, updates: Partial<StagedSignItem>) => {
     setItems((prev) =>
-      prev.map((it) => {
-        if (it.id !== id) return it;
-        return {
-          ...it,
-          file,
-          videoPreviewUrl,
-          signName: it.signName.trim() ? it.signName : cleanNameFromFile(file.name),
-        };
-      })
+      prev.map((item, itemIndex) =>
+        itemIndex === index ? { ...item, ...updates } : item
+      )
     );
   };
 
-  const handleSignPhotoChange = (id: string, file: File) => {
-    const photoPreviewUrl = URL.createObjectURL(file);
-    updateItem(id, { photo: file, photoPreviewUrl });
+  const handleMediaFileChange = (
+    event: React.ChangeEvent<HTMLInputElement>,
+    index: number,
+    field: "objective_image_url" | "reference_video_url"
+  ) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (field === "reference_video_url") {
+      const videoPreviewUrl = URL.createObjectURL(file);
+      const currentName = items[index]?.signName;
+      updateItem(index, {
+        file,
+        videoPreviewUrl,
+        signName: currentName?.trim() ? currentName : cleanNameFromFile(file.name),
+      });
+    } else {
+      const photoPreviewUrl = URL.createObjectURL(file);
+      updateItem(index, { photo: file, photoPreviewUrl });
+    }
   };
 
   const handleStartUpload = async () => {
     if (items.length === 0 || isUploading) return;
 
-    // Validation
     for (let idx = 0; idx < items.length; idx++) {
       const it = items[idx];
       if (!it.signName.trim()) {
-        setUploadError(`Please enter a Sign Name for Round #${idx + 1}.`);
+        setUploadError(`Please enter a Target Sign name for Round ${idx + 1}.`);
         return;
       }
       if (!it.file) {
-        setUploadError(`Please attach a video file for Round #${idx + 1} ("${it.signName}").`);
+        setUploadError(`Please upload a video for Round ${idx + 1} ("${it.signName}").`);
         return;
       }
     }
@@ -168,7 +187,8 @@ export default function BatchAddSignsDialog({
       if (item.status === "done") continue;
 
       setCurrentIndex(i);
-      updateItem(item.id, { status: "uploading", progress: 0, error: undefined });
+      setUploadProgress(0);
+      updateItem(i, { status: "uploading", progress: 0, error: undefined });
 
       try {
         await uploadStageBaseline(
@@ -179,19 +199,29 @@ export default function BatchAddSignsDialog({
           `Demonstration video for ${item.signName.trim()}`,
           item.photo || undefined,
           (percent) => {
-            updateItem(item.id, { progress: percent });
+            setUploadProgress(percent);
+            updateItem(i, { progress: percent });
           }
         );
-        updateItem(item.id, { status: "done", progress: 100 });
+        updateItem(i, { status: "done", progress: 100 });
       } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : "Failed to upload sign video";
-        updateItem(item.id, { status: "error", error: errorMsg });
+        const errorMsg =
+          err instanceof Error ? err.message : "Failed to upload sign video";
+        updateItem(i, { status: "error", error: errorMsg });
       }
     }
 
     setIsUploading(false);
     setCurrentIndex(-1);
+    setUploadProgress(0);
     onComplete();
+  };
+
+  const handleOpen = () => {
+    if (items.length === 0) {
+      addRound();
+    }
+    setIsOpen(true);
   };
 
   const allCompleted = items.length > 0 && items.every((it) => it.status === "done");
@@ -202,27 +232,27 @@ export default function BatchAddSignsDialog({
       <Button
         type="button"
         className="gap-1.5 px-3 py-1.5 text-xs bg-amber-500 hover:bg-amber-600 text-white cursor-pointer shadow-xs font-semibold"
-        onClick={() => setIsOpen(true)}
+        onClick={handleOpen}
       >
         <Zap className="size-3.5 fill-current" />
         <span>Batch Upload Signs</span>
       </Button>
 
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4 animate-in fade-in">
-          <div className="w-full max-w-4xl rounded-3xl bg-white p-6 shadow-2xl border border-gray-100 flex flex-col max-h-[92vh]">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4 animate-in fade-in">
+          <div className="w-full max-w-5xl rounded-4xl bg-(--bg) p-6 sm:p-8 shadow-2xl border border-(--border) flex flex-col max-h-[92vh]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-(--border) pb-4">
               <div className="flex items-center gap-3">
-                <div className="size-10 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                <div className="size-10 rounded-2xl bg-(--primary-light) text-(--primary) flex items-center justify-center">
                   <Zap className="size-5 fill-current" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-gray-900">
+                  <h3 className="heading-3 text-(--black)">
                     Batch Upload Demonstration Signs
                   </h3>
-                  <p className="text-xs text-gray-500">
-                    Preview all demonstration rounds, review video playback, and auto-extract signs.
+                  <p className="caption text-(--ghost)">
+                    Drop demonstration videos, review round previews, and auto-generate sign rounds.
                   </p>
                 </div>
               </div>
@@ -230,323 +260,283 @@ export default function BatchAddSignsDialog({
                 type="button"
                 onClick={() => !isUploading && setIsOpen(false)}
                 disabled={isUploading}
-                className="text-gray-400 hover:text-gray-600 rounded-lg p-1.5 cursor-pointer disabled:opacity-50"
+                className="text-(--ghost) hover:text-(--black) rounded-xl p-1.5 cursor-pointer disabled:opacity-50"
               >
-                <X className="size-5" />
+                <X className="size-6" />
               </button>
             </div>
 
-            {/* Error alert */}
+            {/* Error Banner */}
             {uploadError && (
-              <div className="mt-3 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs text-rose-700 font-semibold flex items-center justify-between">
+              <div className="mt-4 p-4 bg-red-100 text-red-700 rounded-xl text-sm flex items-center justify-between">
                 <span>{uploadError}</span>
                 <button
                   type="button"
                   onClick={() => setUploadError("")}
-                  className="text-rose-500 hover:text-rose-700"
+                  className="font-bold ml-2"
                 >
                   ✕
                 </button>
               </div>
             )}
 
-            {/* Content Body */}
-            <div className="flex-1 overflow-y-auto space-y-5 py-4 pr-1">
-              {/* Batch Drop Zone (Identical to See It, Sign It) */}
-              <div
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setIsDragOver(true);
-                }}
-                onDragLeave={() => setIsDragOver(false)}
-                onDrop={handleDrop}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-3xl p-7 text-center cursor-pointer transition flex flex-col items-center justify-center gap-2 ${
-                  isDragOver
-                    ? "border-amber-500 bg-amber-50 scale-[0.99]"
-                    : "border-amber-300 bg-amber-50/40 hover:bg-amber-50/70"
-                }`}
-              >
-                <UploadCloud className="size-10 text-amber-500" />
-                <span className="text-sm font-bold text-amber-900">
-                  ⚡ Batch Upload Videos (Auto-Generates Rounds)
+            {/* Scrollable Container with Exactly the Same See It Sign It TSX & CSS */}
+            <div className="flex-1 overflow-y-auto space-y-6 py-6 pr-1">
+              {/* Batch Video Dropzone (Identical to See It, Sign It) */}
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-(--primary) bg-(--primary-light)/40 p-6 text-center transition-colors hover:bg-(--primary-light)">
+                <UploadCloud className="size-8 text-(--primary)" />
+                <span className="paragraph-2 font-semibold text-(--primary)">
+                  {isUploading
+                    ? `⚡ Processing sign ${currentIndex + 1} of ${items.length} (${uploadProgress}%)...`
+                    : "⚡ Batch Upload Videos (Auto-Generates Rounds)"}
                 </span>
-                <span className="text-xs text-amber-700/80 max-w-md">
-                  Drop multiple <b>.mp4</b> or <b>.webm</b> videos — target signs will be auto-named from filenames with full playable video previews!
+                <span className="caption text-(--ghost)">
+                  Drop multiple .mp4 / .webm videos — target signs will be auto-named from filenames!
                 </span>
                 <input
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept="video/mp4,video/webm,video/quicktime,video/mkv"
-                  onChange={(e) => e.target.files && handleAddFiles(e.target.files)}
-                  className="hidden"
+                  accept="video/mp4,video/webm,video/quicktime,video/x-matroska"
+                  className="sr-only"
+                  disabled={isUploading}
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    handleBatchVideoDrop(files);
+                    e.target.value = "";
+                  }}
                 />
-              </div>
+              </label>
 
-              {/* Staged Signs Cards (See It, Sign It Layout) */}
-              {items.length > 0 && (
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-bold text-gray-800">
-                      Rounds to Upload ({items.length})
-                    </h4>
-                    <span className="text-xs text-gray-500">
-                      {completedCount} of {items.length} uploaded
-                    </span>
+              {/* Rounds List (Identical Card Structure to See It, Sign It) */}
+              {items.map((item, index) => (
+                <article
+                  key={item.id}
+                  className="flex flex-col gap-6 p-6 bg-(--white) rounded-4xl shadow-lg/5 border border-(--border)"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="flex size-7 items-center justify-center rounded-full bg-(--primary) text-xs font-bold text-white">
+                        {index + 1}
+                      </span>
+                      <Flag className="size-5 text-(--black)" />
+                      <h1 className="heading-3">Round {index + 1}</h1>
+                      {item.status === "done" && (
+                        <span className="ml-2 text-xs font-bold text-emerald-700 bg-emerald-100 px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 className="size-3.5" />
+                          Ready
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      {/* Move Up */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="px-2.5 py-1 text-xs"
+                        disabled={index === 0 || isUploading}
+                        onClick={() => moveRound(index, "up")}
+                        title="Move round up"
+                      >
+                        <ArrowUp className="size-4" />
+                      </Button>
+
+                      {/* Move Down */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="px-2.5 py-1 text-xs"
+                        disabled={index === items.length - 1 || isUploading}
+                        onClick={() => moveRound(index, "down")}
+                        title="Move round down"
+                      >
+                        <ArrowDown className="size-4" />
+                      </Button>
+
+                      {/* Duplicate Round */}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="px-2.5 py-1 text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50"
+                        disabled={isUploading}
+                        onClick={() => duplicateRound(index)}
+                        title="Duplicate round"
+                      >
+                        <Copy className="size-4" />
+                      </Button>
+
+                      {/* Remove */}
+                      {items.length > 1 && !isUploading && (
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          className="px-2.5 py-1 text-xs"
+                          onClick={() => deleteRound(index)}
+                          title="Delete round"
+                        >
+                          <X className="size-4" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
-                  <div className="space-y-4">
-                    {items.map((item, index) => (
-                      <article
-                        key={item.id}
-                        className={`rounded-2xl border-2 p-5 transition relative ${
-                          item.status === "uploading"
-                            ? "border-amber-400 bg-amber-50/40 shadow-sm"
-                            : item.status === "done"
-                            ? "border-emerald-200 bg-emerald-50/30"
-                            : item.status === "error"
-                            ? "border-rose-200 bg-rose-50/40"
-                            : "border-gray-200 bg-gray-50/60"
-                        }`}
-                      >
-                        {/* Round Header Bar */}
-                        <div className="flex items-center justify-between pb-3 mb-3 border-b border-gray-200/80">
-                          <div className="flex items-center gap-2">
-                            <span className="flex size-6 items-center justify-center rounded-full bg-amber-500 font-bold text-white text-xs">
-                              {index + 1}
-                            </span>
-                            <span className="text-sm font-bold text-gray-800">
-                              Round {index + 1}: {item.signName || "Untitled"}
-                            </span>
-                          </div>
-
-                          <div className="flex items-center gap-1.5">
-                            {/* Move Up */}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="px-2 py-1 text-xs"
-                              disabled={index === 0 || isUploading}
-                              onClick={() => moveSign(index, "up")}
-                              title="Move sign up"
-                            >
-                              <ArrowUp className="size-3.5" />
-                            </Button>
-
-                            {/* Move Down */}
-                            <Button
-                              type="button"
-                              variant="outline"
-                              className="px-2 py-1 text-xs"
-                              disabled={index === items.length - 1 || isUploading}
-                              onClick={() => moveSign(index, "down")}
-                              title="Move sign down"
-                            >
-                              <ArrowDown className="size-3.5" />
-                            </Button>
-
-                            {/* Status tag */}
-                            {item.status === "uploading" && (
-                              <span className="text-xs font-bold text-amber-600 bg-amber-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <Loader2 className="size-3 animate-spin" />
-                                {item.progress}%
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Left Column: Objective Image (Visual Aid) + Target Sign */}
+                    <div className="flex flex-col gap-4">
+                      <div>
+                        <span className="paragraph-2 font-medium text-(--black) block mb-2">
+                          Objective Image
+                        </span>
+                        <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light) relative overflow-hidden">
+                          {item.photoPreviewUrl ? (
+                            <img
+                              src={item.photoPreviewUrl}
+                              alt="Uploaded objective"
+                              className="max-h-40 max-w-full rounded-xl object-contain"
+                            />
+                          ) : (
+                            <>
+                              <ImagePlus className="size-10 text-(--primary)" />
+                              <span className="paragraph-2 font-semibold text-(--black)">
+                                Click to upload an image
                               </span>
-                            )}
-                            {item.status === "done" && (
-                              <span className="text-xs font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-                                <CheckCircle2 className="size-3.5" />
-                                Ready
+                              <span className="caption text-(--ghost)">
+                                PNG or JPG up to 10MB
                               </span>
-                            )}
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={(event) =>
+                              handleMediaFileChange(event, index, "objective_image_url")
+                            }
+                            disabled={isUploading}
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
 
-                            {/* Remove button */}
-                            {!isUploading && (
-                              <Button
-                                type="button"
-                                variant="destructive"
-                                className="px-2 py-1 text-xs"
-                                onClick={() => removeItem(item.id)}
-                                title="Remove round"
-                              >
-                                <X className="size-3.5" />
-                              </Button>
-                            )}
-                          </div>
-                        </div>
+                      <div>
+                        <label htmlFor={`target-sign-${index}`} className="paragraph-2 font-medium text-(--black) block mb-2">
+                          Target Sign
+                        </label>
+                        <Input
+                          id={`target-sign-${index}`}
+                          type="text"
+                          placeholder="Enter the target sign"
+                          value={item.signName}
+                          disabled={isUploading}
+                          onChange={(event) =>
+                            updateItem(index, { signName: event.target.value })
+                          }
+                          required
+                        />
+                      </div>
+                    </div>
 
-                        {/* Two-Column Grid: Visual Aid & Target Sign (Left) / Reference Video (Right) */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {/* Left Column: Visual Aid & Sign Name */}
-                          <div className="flex flex-col gap-3">
-                            <div>
-                              <div className="flex items-center justify-between mb-1">
-                                <span className="text-xs font-bold uppercase tracking-wider text-gray-700">
-                                  Visual Aid Picture
+                    {/* Right Column: Reference Video (Demonstration Video) */}
+                    <div>
+                      <div>
+                        <span className="paragraph-2 font-medium text-(--black) block mb-2">
+                          Reference Video
+                        </span>
+                        <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light) relative overflow-hidden">
+                          {item.videoPreviewUrl ? (
+                            <div className="relative flex flex-col items-center w-full">
+                              <video
+                                key={item.videoPreviewUrl}
+                                src={item.videoPreviewUrl}
+                                controls
+                                playsInline
+                                className="max-h-40 max-w-full rounded-xl bg-black"
+                              />
+                              <div className="flex items-center justify-between w-full px-2 mt-2 text-[11px] text-(--ghost)">
+                                <span className="font-semibold truncate max-w-[200px]">
+                                  🎬 {item.file?.name}
                                 </span>
-                                <span className="text-[10px] font-semibold text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                                  Lesson Proper Card
+                                <span>
+                                  {item.file
+                                    ? `${(item.file.size / (1024 * 1024)).toFixed(1)} MB`
+                                    : ""}
                                 </span>
                               </div>
-                              <label className="flex flex-col min-h-44 cursor-pointer items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-gray-200 bg-white p-4 text-center transition-colors hover:border-amber-400 hover:bg-amber-50/30">
-                                {item.photoPreviewUrl ? (
-                                  <div className="flex flex-col items-center gap-1">
-                                    <img
-                                      src={item.photoPreviewUrl}
-                                      alt="Visual Aid"
-                                      className="max-h-32 max-w-full rounded-xl object-contain shadow-xs"
-                                    />
-                                    <span className="text-[11px] font-semibold text-emerald-600">
-                                      📸 {item.photo?.name} (Click to change)
-                                    </span>
-                                  </div>
-                                ) : (
-                                  <>
-                                    <ImagePlus className="size-8 text-amber-500" />
-                                    <span className="text-xs font-semibold text-gray-700">
-                                      Click to upload visual aid picture
-                                    </span>
-                                    <span className="text-[10px] text-gray-400">
-                                      PNG or JPG (auto-captured snapshot if omitted)
-                                    </span>
-                                  </>
-                                )}
-                                <input
-                                  type="file"
-                                  accept="image/png,image/jpeg,image/webp"
-                                  disabled={isUploading}
-                                  onChange={(e) => {
-                                    if (e.target.files && e.target.files[0]) {
-                                      handleSignPhotoChange(item.id, e.target.files[0]);
-                                    }
-                                  }}
-                                  className="hidden"
-                                />
-                              </label>
                             </div>
-
-                            <div>
-                              <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-                                Target Sign Name
-                              </label>
-                              <Input
-                                type="text"
-                                placeholder="Enter the target sign name"
-                                value={item.signName}
-                                disabled={isUploading}
-                                onChange={(e) => updateItem(item.id, { signName: e.target.value })}
-                                required
-                              />
-                            </div>
-                          </div>
-
-                          {/* Right Column: Demonstration Video Player Preview */}
-                          <div className="flex flex-col gap-1">
-                            <span className="text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-                              Demonstration Video
-                            </span>
-                            <div className="flex flex-col min-h-44 items-center justify-center rounded-2xl border-2 border-dashed border-gray-200 bg-white p-3 text-center">
-                              {item.videoPreviewUrl ? (
-                                <div className="space-y-2 w-full flex flex-col items-center">
-                                  <video
-                                    key={item.videoPreviewUrl}
-                                    src={item.videoPreviewUrl}
-                                    controls
-                                    playsInline
-                                    className="max-h-40 w-full rounded-xl bg-black object-contain shadow-xs"
-                                  />
-                                  <div className="flex items-center justify-between w-full px-1 text-[11px] text-gray-500">
-                                    <span className="font-semibold text-gray-700 truncate max-w-[200px]">
-                                      🎬 {item.file?.name}
-                                    </span>
-                                    <span>
-                                      {item.file
-                                        ? `${(item.file.size / (1024 * 1024)).toFixed(1)} MB`
-                                        : ""}
-                                    </span>
-                                  </div>
-                                </div>
-                              ) : (
-                                <label className="flex flex-col items-center justify-center gap-2 cursor-pointer w-full h-full py-6">
-                                  <Video className="size-8 text-amber-500" />
-                                  <span className="text-xs font-semibold text-gray-700">
-                                    Click to select demonstration video
-                                  </span>
-                                  <span className="text-[10px] text-gray-400">
-                                    MP4, WebM or MOV up to 100MB
-                                  </span>
-                                  <input
-                                    type="file"
-                                    accept="video/mp4,video/webm,video/quicktime,video/mkv"
-                                    disabled={isUploading}
-                                    onChange={(e) => {
-                                      if (e.target.files && e.target.files[0]) {
-                                        handleSignVideoChange(item.id, e.target.files[0]);
-                                      }
-                                    }}
-                                    className="hidden"
-                                  />
-                                </label>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Progress Bar per round */}
-                        {item.status === "uploading" && (
-                          <div className="mt-3 space-y-1">
-                            <div className="flex justify-between text-xs font-semibold text-amber-700">
-                              <span>
-                                {item.progress < 100
-                                  ? "Uploading video & cloud sync..."
-                                  : "Extracting landmarks with MediaPipe..."}
+                          ) : (
+                            <>
+                              <Upload className="size-10 text-(--primary)" />
+                              <span className="paragraph-2 font-semibold text-(--black)">
+                                Click to upload a video
                               </span>
-                              <span>{item.progress}%</span>
-                            </div>
-                            <div className="w-full bg-amber-100 h-2 rounded-full overflow-hidden">
-                              <div
-                                className="bg-amber-500 h-full transition-all duration-150 rounded-full"
-                                style={{ width: `${item.progress}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Error state */}
-                        {item.status === "error" && item.error && (
-                          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
-                            <AlertCircle className="size-4 shrink-0" />
-                            <span>{item.error}</span>
-                          </div>
-                        )}
-                      </article>
-                    ))}
+                              <span className="caption text-(--ghost)">
+                                MP4, WebM, or MOV up to 100MB
+                              </span>
+                            </>
+                          )}
+                          <input
+                            type="file"
+                            accept="video/mp4,video/webm,video/quicktime,video/x-matroska"
+                            onChange={(event) =>
+                              handleMediaFileChange(event, index, "reference_video_url")
+                            }
+                            disabled={isUploading}
+                            className="sr-only"
+                          />
+                        </label>
+                      </div>
+                    </div>
                   </div>
 
-                  {/* Add Another Sign Button */}
-                  {!isUploading && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={addBlankSign}
-                      className="w-full gap-2 py-3 border-2 border-dashed border-gray-300 hover:border-amber-400 hover:bg-amber-50/30 text-xs font-bold text-gray-700 cursor-pointer rounded-2xl"
-                    >
-                      <Plus className="size-4 text-amber-500" />
-                      <span>Add Another Demonstration Round</span>
-                    </Button>
+                  {/* Upload Progress Bar if this item is currently uploading */}
+                  {item.status === "uploading" && (
+                    <div className="space-y-1 bg-amber-50 p-3 rounded-2xl border border-amber-200">
+                      <div className="flex justify-between text-xs font-semibold text-(--primary)">
+                        <span>
+                          {item.progress < 100
+                            ? "Uploading video & cloud sync..."
+                            : "Extracting MediaPipe landmark baseline..."}
+                        </span>
+                        <span>{item.progress}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 h-2 rounded-full overflow-hidden">
+                        <div
+                          className="bg-(--primary) h-full transition-all duration-150 rounded-full"
+                          style={{ width: `${item.progress}%` }}
+                        />
+                      </div>
+                    </div>
                   )}
-                </div>
+
+                  {/* Error display */}
+                  {item.status === "error" && item.error && (
+                    <div className="p-3 bg-red-100 text-red-700 rounded-xl text-xs font-semibold">
+                      {item.error}
+                    </div>
+                  )}
+                </article>
+              ))}
+
+              {/* Add Round Button (Identical to See It, Sign It) */}
+              {!isUploading && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addRound}
+                  className="w-full py-4 rounded-3xl border-2 border-dashed border-(--border) hover:border-(--primary) hover:bg-(--primary-light) text-sm font-bold text-(--primary) gap-2 cursor-pointer transition-colors"
+                >
+                  <Plus className="size-4" />
+                  <span>Add Round</span>
+                </Button>
               )}
             </div>
 
-            {/* Footer Buttons */}
-            <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-              <span className="text-xs text-gray-500 font-medium">
-                {items.length > 0
-                  ? `${items.length} ${items.length === 1 ? "round" : "rounds"} staged`
-                  : "No demonstration videos staged yet."}
+            {/* Footer */}
+            <div className="flex items-center justify-between border-t border-(--border) pt-4">
+              <span className="caption text-(--ghost)">
+                {items.length} {items.length === 1 ? "round" : "rounds"} ({completedCount} uploaded)
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <Button
                   type="button"
                   variant="outline"
@@ -560,12 +550,12 @@ export default function BatchAddSignsDialog({
                     type="button"
                     onClick={handleStartUpload}
                     disabled={isUploading}
-                    className="gap-2 bg-amber-500 hover:bg-amber-600 text-white font-bold cursor-pointer"
+                    className="gap-2 cursor-pointer font-bold"
                   >
                     {isUploading && <Loader2 className="size-4 animate-spin" />}
                     {isUploading
                       ? `Processing (${currentIndex + 1}/${items.length})...`
-                      : `🚀 Upload & Save All (${items.length} Signs)`}
+                      : `Upload & Save All (${items.length} Rounds)`}
                   </Button>
                 )}
               </div>
