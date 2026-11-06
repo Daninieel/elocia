@@ -126,15 +126,7 @@ def extract_minigame_baseline(video_url: Optional[str], game_type: str, word_ide
         logger.info(f"Extracting baseline for {game_type} word '{clean_word}' from {video_path}...")
         
         # 100% in-process MediaPipe Holistic extraction (zero subprocess overhead, immune to 0xc0000142)
-        try:
-            from app.core.extract_baseline import extract_landmarks
-        except ImportError:
-            if PROJECT_ROOT not in sys.path:
-                sys.path.insert(0, PROJECT_ROOT)
-            extractor_dir = os.path.dirname(EXTRACTOR_SCRIPT)
-            if extractor_dir not in sys.path:
-                sys.path.insert(0, extractor_dir)
-            from extract_baseline import extract_landmarks
+        from app.core.extract_baseline import extract_landmarks
         
         res = extract_landmarks(video_path, backend_json_path, clean_word)
         if res and res.get("success"):
