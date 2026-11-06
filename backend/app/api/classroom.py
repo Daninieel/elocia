@@ -290,10 +290,11 @@ async def upload_educational_video_file(
     clean_title = "".join(c for c in title if c.isalnum() or c in (" ", "_", "-")).strip().replace(" ", "_")
     video_filename = f"edu_{uuid.uuid4().hex[:8]}_{clean_title}{ext}"
 
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    backend_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    storage_dir = os.path.join(backend_root, "storage", "videos")
+    storage_thumb_dir = os.path.join(backend_root, "storage", "thumbnails")
+    project_root = os.path.abspath(os.path.join(backend_root, ".."))
     public_dir = os.path.join(project_root, "apps", "student-desktop", "frontend", "public", "videos")
-    storage_dir = os.path.join(project_root, "backend", "storage", "videos")
-    storage_thumb_dir = os.path.join(project_root, "backend", "storage", "thumbnails")
     public_thumb_dir = os.path.join(project_root, "apps", "student-desktop", "frontend", "public", "thumbnails")
     os.makedirs(public_dir, exist_ok=True)
     os.makedirs(storage_dir, exist_ok=True)

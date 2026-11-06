@@ -13,9 +13,13 @@ import asyncio
 import time
 from typing import Optional
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ovffqxjrokyuvlkmccup.supabase.co").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92ZmZxeGpyb2t5dXZsa21jY3VwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODQxOTg5OCwiZXhwIjoyMTAzOTk1ODk4fQ.Tk0FKf1oTPHdnYtq1b9MN-GtfiYPDPyCYZ7y_H0XNKw")
-BUCKET_NAME = os.getenv("SUPABASE_STORAGE_BUCKET", "elocia-media")
+SUPABASE_URL = (os.getenv("SUPABASE_URL") or "https://ovffqxjrokyuvlkmccup.supabase.co").strip().rstrip("/")
+SUPABASE_KEY = (
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or
+    os.getenv("SUPABASE_KEY") or
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92ZmZxeGpyb2t5dXZsa21jY3VwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODQxOTg5OCwiZXhwIjoyMTAzOTk1ODk4fQ.Tk0FKf1oTPHdnYtq1b9MN-GtfiYPDPyCYZ7y_H0XNKw"
+).strip()
+BUCKET_NAME = (os.getenv("SUPABASE_STORAGE_BUCKET") or "elocia-media").strip()
 
 def _get_mime_type(filename: str) -> str:
     ext = os.path.splitext(filename)[1].lower()
@@ -66,9 +70,15 @@ def upload_file_to_supabase_streaming_sync(folder: str, filename: str, file_path
                 with urllib.request.urlopen(req, timeout=120) as response:
                     if response.status in [200, 201]:
                         return get_public_url(folder, filename)
-        except Exception as e:
+        except urllib.error.HTTPError as he:
+            err_body = he.read().decode('utf-8', errors='ignore') if hasattr(he, 'read') else str(he)
+            print(f"[Supabase Storage HTTPError] Attempt {attempt} for {clean_path}: {he.code} {he.reason} - {err_body}")
             if attempt == 3:
-                print(f"[Supabase Storage Warning] Could not stream-upload {clean_path} after 3 attempts: {e}")
+                return None
+            time.sleep(1.5 * attempt)
+        except Exception as e:
+            print(f"[Supabase Storage Exception] Attempt {attempt} for {clean_path}: {type(e).__name__} {e}")
+            if attempt == 3:
                 return None
             time.sleep(1.5 * attempt)
 
