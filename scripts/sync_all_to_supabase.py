@@ -135,6 +135,9 @@ def sync_category(category_name: str, folder_prefix: str, local_dirs: list, vali
 
     for idx, (name, path) in enumerate(to_upload.items(), 1):
         size_kb = os.path.getsize(path) / 1024
+        if size_kb > 50000:
+            print(f"[{idx}/{total}] Skipping {name} ({size_kb:.1f} KB - exceeds Supabase 50MB limit)")
+            continue
         print(f"[{idx}/{total}] Uploading {name} ({size_kb:.1f} KB)...", end=" ", flush=True)
         ok = upload_file_to_supabase(folder_prefix, name, path)
         if ok:

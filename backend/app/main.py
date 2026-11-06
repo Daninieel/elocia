@@ -106,8 +106,8 @@ async def serve_minigame_image(file_path: str):
     local_path = os.path.join(minigame_images_dir, clean_file)
     if os.path.exists(local_path):
         return FileResponse(local_path)
-    # Automatic fallback to Supabase Storage CDN
-    return RedirectResponse(url=f"{SUPABASE_FALLBACK_BASE}/minigames/images/{clean_file}", status_code=307)
+    # Automatic fallback to Supabase Storage CDN (thumbnails folder)
+    return RedirectResponse(url=f"{SUPABASE_FALLBACK_BASE}/thumbnails/{clean_file}", status_code=307)
 
 @app.get("/minigames/videos/{file_path:path}")
 async def serve_minigame_video(file_path: str):
@@ -115,8 +115,8 @@ async def serve_minigame_video(file_path: str):
     local_path = os.path.join(minigame_videos_dir, clean_file)
     if os.path.exists(local_path):
         return FileResponse(local_path)
-    # Automatic fallback to Supabase Storage CDN
-    return RedirectResponse(url=f"{SUPABASE_FALLBACK_BASE}/minigames/videos/{clean_file}", status_code=307)
+    # Automatic fallback to Supabase Storage CDN (videos folder)
+    return RedirectResponse(url=f"{SUPABASE_FALLBACK_BASE}/videos/{clean_file}", status_code=307)
 
 @app.get("/")
 async def root():

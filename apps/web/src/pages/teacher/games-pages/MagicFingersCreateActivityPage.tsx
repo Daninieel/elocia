@@ -191,6 +191,18 @@ export function MagicFingersCreateActivityStepTwoPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Instant local preview
+    const localUrl = URL.createObjectURL(file);
+    updateItem(index, { [field]: localUrl });
+
+    // Auto-populate word if empty
+    const currentWord = game.items[index]?.word;
+    if (!currentWord || !currentWord.trim()) {
+      const raw = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+      const clean = raw.charAt(0).toUpperCase() + raw.slice(1);
+      updateItem(index, { word: clean, [field]: localUrl });
+    }
+
     setIsUploading(true);
     setUploadingTarget(`${index}_${field}`);
     setUploadProgress(0);
@@ -634,9 +646,11 @@ export function MagicFingersCreateActivityStepTwoPage() {
                           {item.reference_video_url ? (
                             <div className="space-y-2 w-full">
                               <video
+                                key={item.reference_video_url}
                                 src={resolveMediaUrl(item.reference_video_url)}
                                 controls
-                                className="max-h-40 w-full rounded-xl"
+                                playsInline
+                                className="max-h-40 w-full rounded-xl bg-black"
                               />
                               <span className="caption text-green-600 font-semibold block">
                                 ✓ Letter 1 ({firstChar}) uploaded. Click to change.
@@ -691,9 +705,11 @@ export function MagicFingersCreateActivityStepTwoPage() {
                           {item.reference_video_url_2 ? (
                             <div className="space-y-2 w-full">
                               <video
+                                key={item.reference_video_url_2}
                                 src={resolveMediaUrl(item.reference_video_url_2)}
                                 controls
-                                className="max-h-40 w-full rounded-xl"
+                                playsInline
+                                className="max-h-40 w-full rounded-xl bg-black"
                               />
                               <span className="caption text-green-600 font-semibold block">
                                 ✓ Letter 2 ({secondChar}) uploaded. Click to change.
@@ -735,9 +751,11 @@ export function MagicFingersCreateActivityStepTwoPage() {
                       {item.reference_video_url ? (
                         <div className="space-y-2 w-full">
                           <video
+                            key={item.reference_video_url}
                             src={resolveMediaUrl(item.reference_video_url)}
                             controls
-                            className="max-h-48 w-full rounded-xl"
+                            playsInline
+                            className="max-h-48 w-full rounded-xl bg-black"
                           />
                           <span className="caption text-green-600 font-semibold block">
                             ✓ Video uploaded. Click to change.
@@ -953,8 +971,10 @@ export function MagicFingersCreateActivityStepThreePage() {
                           </span>
                           {item.reference_video_url ? (
                             <video
+                              key={item.reference_video_url}
                               src={resolveMediaUrl(item.reference_video_url)}
                               controls
+                              playsInline
                               className="max-h-40 w-full rounded-xl bg-black"
                             />
                           ) : (
@@ -969,8 +989,10 @@ export function MagicFingersCreateActivityStepThreePage() {
                           </span>
                           {item.reference_video_url_2 ? (
                             <video
+                              key={item.reference_video_url_2}
                               src={resolveMediaUrl(item.reference_video_url_2)}
                               controls
+                              playsInline
                               className="max-h-40 w-full rounded-xl bg-black"
                             />
                           ) : (
@@ -982,8 +1004,10 @@ export function MagicFingersCreateActivityStepThreePage() {
                       </div>
                     ) : item.reference_video_url ? (
                       <video
+                        key={item.reference_video_url}
                         src={resolveMediaUrl(item.reference_video_url)}
                         controls
+                        playsInline
                         className="max-h-52 w-full rounded-xl bg-black"
                       />
                     ) : (

@@ -126,12 +126,15 @@ def extract_minigame_baseline(video_url: Optional[str], game_type: str, word_ide
         logger.info(f"Extracting baseline for {game_type} word '{clean_word}' from {video_path}...")
         
         # 100% in-process MediaPipe Holistic extraction (zero subprocess overhead, immune to 0xc0000142)
-        if PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, PROJECT_ROOT)
-        extractor_dir = os.path.dirname(EXTRACTOR_SCRIPT)
-        if extractor_dir not in sys.path:
-            sys.path.insert(0, extractor_dir)
-        from extract_baseline import extract_landmarks
+        try:
+            from app.core.extract_baseline import extract_landmarks
+        except ImportError:
+            if PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, PROJECT_ROOT)
+            extractor_dir = os.path.dirname(EXTRACTOR_SCRIPT)
+            if extractor_dir not in sys.path:
+                sys.path.insert(0, extractor_dir)
+            from extract_baseline import extract_landmarks
         
         res = extract_landmarks(video_path, backend_json_path, clean_word)
         if res and res.get("success"):
@@ -164,11 +167,21 @@ async def upload_minigame_media(file: UploadFile = File(...)):
     image_exts = [".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"]
     video_exts = [".mp4", ".webm", ".mov", ".mkv"]
 
+    file_bytes = await file.read()
+
     if ext in image_exts:
         filename = f"img_{uuid.uuid4().hex[:10]}{ext}"
         destination = os.path.join(MINIGAME_IMAGES_DIR, filename)
         with open(destination, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(file_bytes)
+
+        # Dual-mode Cloud Sync: upload image to Supabase Storage (thumbnails folder)
+        try:
+            from app.core.supabase_storage import upload_to_supabase
+            await upload_to_supabase("thumbnails", filename, file_bytes)
+        except Exception as sup_err:
+            logger.warning(f"[Supabase Storage Warning - Minigame Image]: {sup_err}")
+
         return {
             "status": "success",
             "type": "image",
@@ -178,7 +191,7 @@ async def upload_minigame_media(file: UploadFile = File(...)):
         filename = f"vid_{uuid.uuid4().hex[:10]}{ext}"
         destination = os.path.join(MINIGAME_VIDEOS_DIR, filename)
         with open(destination, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(file_bytes)
 
         # Copy to desktop public videos directory if it exists
         if os.path.exists(DESKTOP_PUBLIC_VIDEOS):
@@ -186,6 +199,13 @@ async def upload_minigame_media(file: UploadFile = File(...)):
                 shutil.copyfile(destination, os.path.join(DESKTOP_PUBLIC_VIDEOS, filename))
             except Exception:
                 pass
+
+        # Dual-mode Cloud Sync: upload video to Supabase Storage (videos folder)
+        try:
+            from app.core.supabase_storage import upload_to_supabase
+            await upload_to_supabase("videos", filename, file_bytes)
+        except Exception as sup_err:
+            logger.warning(f"[Supabase Storage Warning - Minigame Video]: {sup_err}")
 
         return {
             "status": "success",

@@ -31,7 +31,13 @@ export default function AddSignDialog({ stageId, gradeLevel = 1, onAdded }: AddS
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      setSelectedFile(e.target.files[0]);
+      const file = e.target.files[0];
+      setSelectedFile(file);
+      if (!signName.trim()) {
+        const rawName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+        const cleanName = rawName.charAt(0).toUpperCase() + rawName.slice(1);
+        setSignName(cleanName);
+      }
     }
   };
 
@@ -142,9 +148,18 @@ export default function AddSignDialog({ stageId, gradeLevel = 1, onAdded }: AddS
                 >
                   <Upload className="size-6 text-gray-400" />
                   {selectedFile ? (
-                    <div>
-                      <p className="text-xs font-semibold text-gray-800">{selectedFile.name}</p>
-                      <p className="text-[11px] text-gray-500">{(selectedFile.size / (1024 * 1024)).toFixed(1)} MB</p>
+                    <div className="flex flex-col items-center gap-2 w-full">
+                      <video
+                        src={URL.createObjectURL(selectedFile)}
+                        controls
+                        playsInline
+                        className="max-h-40 w-full rounded-lg bg-black object-contain shadow-xs"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                      <div>
+                        <p className="text-xs font-semibold text-gray-800">🎬 {selectedFile.name}</p>
+                        <p className="text-[11px] text-gray-500">{(selectedFile.size / (1024 * 1024)).toFixed(1)} MB (Click to replace)</p>
+                      </div>
                     </div>
                   ) : (
                     <div>

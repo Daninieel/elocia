@@ -7,6 +7,7 @@ import EditStageDialog from "@/components/teacher/EditStageDialog";
 import EditStageThumbnailsDialog from "@/components/teacher/EditStageThumbnailsDialog";
 import EditSignDialog from "@/components/teacher/EditSignDialog";
 import AddSignDialog from "@/components/teacher/AddSignDialog";
+import BatchAddSignsDialog from "@/components/teacher/BatchAddSignsDialog";
 import { fetchStageById } from "@/services/curriculum";
 import { resolveMediaUrl } from "@/services/mini-games";
 import { ChevronLeft, Play, Video, FileText, CheckCircle2, Image as ImageIcon } from "lucide-react";
@@ -179,6 +180,11 @@ export default function TeacherStageItemPage() {
                   <span className="text-xs font-semibold text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
                     {stage.signs?.length || 0} Sign{stage.signs?.length === 1 ? "" : "s"} Mastered
                   </span>
+                  <BatchAddSignsDialog
+                    stageId={stage.id}
+                    gradeLevel={1}
+                    onComplete={loadStage}
+                  />
                   <AddSignDialog
                     stageId={stage.id}
                     gradeLevel={1}
@@ -305,7 +311,12 @@ export default function TeacherStageItemPage() {
                   <p className="text-sm text-gray-500 max-w-md mx-auto">
                     This stage does not have demonstration video baselines attached yet. You can click &quot;Add Sign Video&quot; above to add sign demonstration rounds.
                   </p>
-                  <div className="pt-2 flex justify-center">
+                  <div className="pt-2 flex justify-center gap-2">
+                    <BatchAddSignsDialog
+                      stageId={stage.id}
+                      gradeLevel={1}
+                      onComplete={loadStage}
+                    />
                     <AddSignDialog
                       stageId={stage.id}
                       gradeLevel={1}

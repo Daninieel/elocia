@@ -202,11 +202,32 @@ async def get_students(
     )
     all_evals = eval_res.scalars().all()
     student_eval_map: dict = {}
-    tier4_student_ids = set()
     for a in all_evals:
         student_eval_map.setdefault(a.student_id, []).append(a)
-        if a.tier_level == 4:
-            tier4_student_ids.add(str(a.student_id))
+
+    tier4_student_ids = set()
+    from app.core.focus_drills import is_sign_resolved
+
+    for sid, s_atts in student_eval_map.items():
+        # Evaluate student's latest attempt per sign to ensure resolved/passed struggles clear the red mark
+        latest_by_sign = {}
+        for a in s_atts:
+            sign_key = str(a.sign_id or a.sign_name or a.stage_id).strip().lower()
+            latest_by_sign[sign_key] = a
+
+        has_active_t4 = False
+        for sk, latt in latest_by_sign.items():
+            if latt.tier_level == 4 and not latt.passed:
+                if not is_sign_resolved(
+                    student_id=str(sid),
+                    stage_id=latt.stage_id,
+                    sign_id=latt.sign_id,
+                    sign_name=latt.sign_name
+                ):
+                    has_active_t4 = True
+                    break
+        if has_active_t4:
+            tier4_student_ids.add(str(sid))
 
     student_averages = {
         sid: compute_student_stage_average(s_atts)

@@ -176,6 +176,18 @@ export function SeeItSignItCreateActivityStepTwoPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Instant local preview in browser memory (zero latency)
+    const localUrl = URL.createObjectURL(file);
+    updateItem(index, { [field]: localUrl });
+
+    // Auto-populate target sign from filename if empty
+    const currentAnswer = game.items[index]?.objective_answer;
+    if (!currentAnswer || !currentAnswer.trim()) {
+      const raw = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+      const clean = raw.charAt(0).toUpperCase() + raw.slice(1);
+      updateItem(index, { objective_answer: clean, [field]: localUrl });
+    }
+
     setIsUploading(true);
     setUploadingTarget(`${index}_${field}`);
     setUploadProgress(0);
@@ -184,6 +196,7 @@ export function SeeItSignItCreateActivityStepTwoPage() {
       const res = await uploadMiniGameMedia(file, (percent) => {
         setUploadProgress(percent);
       });
+      // Update form state with the persistent URL for server save
       updateItem(index, { [field]: res.url });
     } catch (err) {
       setUploadError(
@@ -406,13 +419,24 @@ export function SeeItSignItCreateActivityStepTwoPage() {
             <div className="flex flex-col gap-4">
               <div>
                 <span>Objective Image</span>
-                <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light)">
+                <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light) relative overflow-hidden">
                   {item.objective_image_url ? (
-                    <img
-                      src={resolveMediaUrl(item.objective_image_url)}
-                      alt="Uploaded objective"
-                      className="max-h-40 max-w-full rounded-xl object-contain"
-                    />
+                    <div className="relative flex flex-col items-center">
+                      <img
+                        key={item.objective_image_url}
+                        src={resolveMediaUrl(item.objective_image_url)}
+                        alt="Uploaded objective"
+                        className="max-h-40 max-w-full rounded-xl object-contain"
+                      />
+                      {isUploading && uploadingTarget === `${index}_objective_image_url` && (
+                        <div className="absolute inset-0 bg-black/50 backdrop-blur-xs rounded-xl flex flex-col items-center justify-center text-white p-2">
+                          <span className="text-xs font-bold mb-1">Syncing to cloud ({uploadProgress}%)...</span>
+                          <div className="w-24 bg-white/30 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-white h-full transition-all duration-150" style={{ width: `${uploadProgress}%` }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <>
                       <ImagePlus className="size-10 text-(--primary)" />
@@ -463,13 +487,25 @@ export function SeeItSignItCreateActivityStepTwoPage() {
             <div>
               <div>
                 <label>Reference Video</label>
-                <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light)">
+                <label className="flex flex-col min-h-56 cursor-pointer items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-(--border) bg-(--gray-50) p-6 text-center transition-colors hover:border-(--primary) hover:bg-(--primary-light) relative overflow-hidden">
                   {item.reference_video_url ? (
-                    <video
-                      src={resolveMediaUrl(item.reference_video_url)}
-                      controls
-                      className="max-h-40 max-w-full rounded-xl"
-                    />
+                    <div className="relative flex flex-col items-center w-full">
+                      <video
+                        key={item.reference_video_url}
+                        src={resolveMediaUrl(item.reference_video_url)}
+                        controls
+                        playsInline
+                        className="max-h-40 max-w-full rounded-xl bg-black"
+                      />
+                      {isUploading && uploadingTarget === `${index}_reference_video_url` && (
+                        <div className="absolute inset-0 bg-black/50 backdrop-blur-xs rounded-xl flex flex-col items-center justify-center text-white p-2">
+                          <span className="text-xs font-bold mb-1">Syncing video to cloud ({uploadProgress}%)...</span>
+                          <div className="w-24 bg-white/30 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-white h-full transition-all duration-150" style={{ width: `${uploadProgress}%` }} />
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <>
                       <Upload className="size-10 text-(--primary)" />
@@ -680,8 +716,10 @@ export function SeeItSignItCreateActivityStepThreePage() {
                   </p>
                   {item.reference_video_url ? (
                     <video
+                      key={item.reference_video_url}
                       src={resolveMediaUrl(item.reference_video_url)}
                       controls
+                      playsInline
                       className="max-h-64 w-full rounded-xl bg-black"
                     />
                   ) : (

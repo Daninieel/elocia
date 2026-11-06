@@ -12,7 +12,7 @@ import asyncio
 from typing import Optional
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ovffqxjrokyuvlkmccup.supabase.co").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im92ZmZxeGpyb2t5dXZsa21jY3VwIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODQxOTg5OCwiZXhwIjoyMTAzOTk1ODk4fQ.Tk0FKf1oTPHdnYtq1b9MN-GtfiYPDPyCYZ7y_H0XNKw")
 BUCKET_NAME = os.getenv("SUPABASE_STORAGE_BUCKET", "elocia-media")
 
 def _get_mime_type(filename: str) -> str:

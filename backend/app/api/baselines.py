@@ -163,12 +163,15 @@ async def upload_baseline_video(
     # 5. Execute extraction: in worker thread to prevent event loop starvation on Windows Proactor
     extract_result = None
     try:
-        if PROJECT_ROOT not in sys.path:
-            sys.path.insert(0, PROJECT_ROOT)
-        extractor_dir = os.path.dirname(EXTRACTOR_SCRIPT)
-        if extractor_dir not in sys.path:
-            sys.path.insert(0, extractor_dir)
-        from extract_baseline import extract_landmarks
+        try:
+            from app.core.extract_baseline import extract_landmarks
+        except ImportError:
+            if PROJECT_ROOT not in sys.path:
+                sys.path.insert(0, PROJECT_ROOT)
+            extractor_dir = os.path.dirname(EXTRACTOR_SCRIPT)
+            if extractor_dir not in sys.path:
+                sys.path.insert(0, extractor_dir)
+            from extract_baseline import extract_landmarks
         
         res = await asyncio.to_thread(extract_landmarks, target_video_path, desktop_json_path, str(stage_id))
         if res and res.get("success"):

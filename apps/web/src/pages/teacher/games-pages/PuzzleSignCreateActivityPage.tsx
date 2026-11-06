@@ -250,6 +250,20 @@ export function PuzzleSignCreateActivityStepTwoPage() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Instant local preview
+    const localUrl = URL.createObjectURL(file);
+    updateItem(index, { [field]: localUrl });
+
+    // Auto-populate hidden word if video and field empty
+    if (field === "reference_video_url") {
+      const currentWord = game.items[index]?.hidden_word;
+      if (!currentWord || !currentWord.trim()) {
+        const raw = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
+        const clean = raw.charAt(0).toUpperCase() + raw.slice(1);
+        updateItem(index, { hidden_word: clean, [field]: localUrl });
+      }
+    }
+
     setIsUploading(true);
     setUploadingTarget(`${index}_${field}`);
     setUploadProgress(0);

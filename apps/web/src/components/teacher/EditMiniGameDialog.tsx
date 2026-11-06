@@ -125,6 +125,10 @@ export default function EditMiniGameDialog({
     onSuccess: (uploadedUrl: string) => void,
     fieldKey: string,
   ) => {
+    // Instant local preview
+    const localUrl = URL.createObjectURL(file);
+    onSuccess(localUrl);
+
     setUploadingField(fieldKey);
     setUploadProgress(0);
     setError(null);
