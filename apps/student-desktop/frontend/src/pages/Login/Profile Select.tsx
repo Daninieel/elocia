@@ -15,7 +15,7 @@ interface ProfileSelectProps {
 export default function ProfileSelect({
   students,
   onSelectStudent,
-  onBack,
+  onBack: _onBack,
   onRetry,
   connectionStatus,
 }: ProfileSelectProps) {
@@ -55,32 +55,6 @@ export default function ProfileSelect({
       </div>
 
       <div className="ps-content">
-        {/* Top Back Navigation */}
-        {onBack && (
-          <div style={{ width: '100%', maxWidth: '800px', display: 'flex', justifyContent: 'flex-start', marginBottom: '8px' }}>
-            <button
-              type="button"
-              onClick={onBack}
-              style={{
-                background: 'rgba(255, 255, 255, 0.85)',
-                border: '1px solid #E2E8F0',
-                borderRadius: '12px',
-                padding: '8px 16px',
-                fontSize: '13px',
-                fontWeight: 700,
-                color: '#475569',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '6px',
-                boxShadow: '0 2px 4px rgba(0,0,0,0.04)',
-              }}
-            >
-              {"\u2190"} Back
-            </button>
-          </div>
-        )}
-
         {/* Logo */}
         <div className="ps-logo-card">
           <img src={logoImg} alt="ELOCIA" className="ps-logo-img" />
