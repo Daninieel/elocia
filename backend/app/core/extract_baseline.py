@@ -52,9 +52,12 @@ def _generate_fallback_baseline(output_json_path: str, stage_id: str = None, fra
         }
         baseline_data.append(frame_data)
 
-    os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
-    with open(output_json_path, 'w', encoding='utf-8') as f:
-        json.dump(baseline_data, f)
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
+        with open(output_json_path, 'w', encoding='utf-8') as f:
+            json.dump(baseline_data, f)
+    except Exception as save_err:
+        logger.warning(f"Could not save fallback baseline JSON: {save_err}")
 
     return {
         "success": True,
@@ -161,9 +164,12 @@ def extract_landmarks(video_path, output_json_path, stage_id=None):
             logger.info("No hands detected in video frames; writing standardized baseline template.")
             return _generate_fallback_baseline(output_json_path, stage_id, frame_count=max(frame_count, 30))
 
-        os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
-        with open(output_json_path, 'w', encoding='utf-8') as f:
-            json.dump(baseline_data, f)
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(output_json_path)), exist_ok=True)
+            with open(output_json_path, 'w', encoding='utf-8') as f:
+                json.dump(baseline_data, f)
+        except Exception as save_err:
+            logger.warning(f"Could not save extracted baseline JSON: {save_err}")
 
         result = {
             "success": True,

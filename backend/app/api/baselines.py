@@ -26,8 +26,20 @@ def safe_log(msg: str):
     except Exception:
         pass
 
-# Directories for videos and baselines
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+# Robust Storage & Baseline Path Resolution (Local Desktop + Cloud Backend Containers)
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+STORAGE_DIR = os.path.join(BACKEND_DIR, "storage")
+STORAGE_VIDEOS_DIR = os.path.join(STORAGE_DIR, "videos")
+STORAGE_BASELINES_DIR = os.path.join(STORAGE_DIR, "baselines", "lessons")
+STORAGE_THUMBNAILS_DIR = os.path.join(STORAGE_DIR, "thumbnails")
+
+candidate_root = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
+HAS_DESKTOP = os.path.isdir(os.path.join(candidate_root, "apps", "student-desktop"))
+PROJECT_ROOT = candidate_root if HAS_DESKTOP else BACKEND_DIR
+
+PUBLIC_VIDEOS_DIR = os.path.join(candidate_root, "apps", "student-desktop", "frontend", "public", "videos") if HAS_DESKTOP else STORAGE_VIDEOS_DIR
+BASELINES_DIR = os.path.join(candidate_root, "apps", "student-desktop", "desktop", "baselines", "lessons") if HAS_DESKTOP else STORAGE_BASELINES_DIR
+PUBLIC_THUMBNAILS_DIR = os.path.join(candidate_root, "apps", "student-desktop", "frontend", "public", "thumbnails") if HAS_DESKTOP else STORAGE_THUMBNAILS_DIR
 
 def get_python_exe():
     local_app_py = os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python311\python.exe")
@@ -43,16 +55,17 @@ def get_python_exe():
 DESKTOP_PYTHON = get_python_exe()
 EXTRACTOR_SCRIPT = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "desktop", "baselines", "extract_baseline.py")
 
-PUBLIC_VIDEOS_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "frontend", "public", "videos")
-BASELINES_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "desktop", "baselines", "lessons")
-STORAGE_VIDEOS_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "videos")
-STORAGE_BASELINES_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "baselines", "lessons")
-PUBLIC_THUMBNAILS_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "frontend", "public", "thumbnails")
-STORAGE_THUMBNAILS_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "thumbnails")
-
-# Ensure required directories exist
-for d in [PUBLIC_VIDEOS_DIR, BASELINES_DIR, STORAGE_VIDEOS_DIR, STORAGE_BASELINES_DIR, PUBLIC_THUMBNAILS_DIR, STORAGE_THUMBNAILS_DIR]:
+# Ensure required storage directories exist
+for d in [STORAGE_VIDEOS_DIR, STORAGE_BASELINES_DIR, STORAGE_THUMBNAILS_DIR]:
     os.makedirs(d, exist_ok=True)
+
+if HAS_DESKTOP:
+    for d in [PUBLIC_VIDEOS_DIR, BASELINES_DIR, PUBLIC_THUMBNAILS_DIR]:
+        try:
+            os.makedirs(d, exist_ok=True)
+        except Exception:
+            pass
+
 
 @router.post("/upload", response_model=BaselineUploadResult)
 async def upload_baseline_video(
@@ -90,18 +103,23 @@ async def upload_baseline_video(
 
     resolved_sign_id = sign_id if sign_id is not None else stage_id
 
-    # 3. Save video file to public videos and storage
+    # 3. Save video file to primary storage
     video_filename = f"{stage_id}{ext}"
-    target_video_path = os.path.join(PUBLIC_VIDEOS_DIR, video_filename)
-    backup_video_path = os.path.join(STORAGE_VIDEOS_DIR, video_filename)
+    storage_video_path = os.path.join(STORAGE_VIDEOS_DIR, video_filename)
+    desktop_video_path = os.path.join(PUBLIC_VIDEOS_DIR, video_filename) if HAS_DESKTOP else None
 
-    with open(target_video_path, "wb") as f_out:
+    with open(storage_video_path, "wb") as f_out:
         shutil.copyfileobj(video.file, f_out)
-    shutil.copyfile(target_video_path, backup_video_path)
+
+    if desktop_video_path and os.path.normcase(os.path.abspath(desktop_video_path)) != os.path.normcase(os.path.abspath(storage_video_path)):
+        try:
+            shutil.copyfile(storage_video_path, desktop_video_path)
+        except Exception as d_err:
+            safe_log(f"[Desktop Video Sync Note]: {d_err}")
 
     # 3c. Cloud Sync: upload video to Supabase Storage (dual-mode)
     try:
-        with open(target_video_path, "rb") as f_vid:
+        with open(storage_video_path, "rb") as f_vid:
             v_bytes = f_vid.read()
         await upload_to_supabase("videos", video_filename, v_bytes)
     except Exception as sup_v_err:
@@ -113,15 +131,19 @@ async def upload_baseline_video(
             p_ext = os.path.splitext(photo.filename)[1].lower() or ".png"
             photo_bytes = await photo.read()
             for name in [f"thumb_{stage_id}{p_ext}", f"{stage_id}{p_ext}", f"{resolved_sign_id}{p_ext}", f"thumb_{sign_name}.png", f"{sign_name}.png", f"thumb_{resolved_sign_id}.png"]:
-                with open(os.path.join(PUBLIC_THUMBNAILS_DIR, name), "wb") as fp:
-                    fp.write(photo_bytes)
                 with open(os.path.join(STORAGE_THUMBNAILS_DIR, name), "wb") as fb:
                     fb.write(photo_bytes)
+                if HAS_DESKTOP:
+                    try:
+                        with open(os.path.join(PUBLIC_THUMBNAILS_DIR, name), "wb") as fp:
+                            fp.write(photo_bytes)
+                    except Exception:
+                        pass
         else:
             def extract_thumb():
                 try:
                     import cv2
-                    cap = cv2.VideoCapture(target_video_path)
+                    cap = cv2.VideoCapture(storage_video_path)
                     if cap.isOpened():
                         total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 1
                         cap.set(cv2.CAP_PROP_POS_FRAMES, min(max(int(total * 0.35), 0), total - 1))
@@ -132,8 +154,12 @@ async def upload_baseline_video(
                         cap.release()
                         if ret and frame is not None:
                             for name in [f"thumb_{stage_id}.png", f"{stage_id}.png", f"thumb_{sign_name}.png", f"{sign_name}.png", f"thumb_{resolved_sign_id}.png"]:
-                                cv2.imwrite(os.path.join(PUBLIC_THUMBNAILS_DIR, name), frame)
                                 cv2.imwrite(os.path.join(STORAGE_THUMBNAILS_DIR, name), frame)
+                                if HAS_DESKTOP:
+                                    try:
+                                        cv2.imwrite(os.path.join(PUBLIC_THUMBNAILS_DIR, name), frame)
+                                    except Exception:
+                                        pass
                 except Exception as th_err:
                     pass
             await asyncio.to_thread(extract_thumb)
@@ -142,9 +168,9 @@ async def upload_baseline_video(
 
     # 3d. Cloud Sync: upload thumbnail to Supabase Storage
     try:
-        t_cand = os.path.join(PUBLIC_THUMBNAILS_DIR, f"{resolved_sign_id}.png")
+        t_cand = os.path.join(STORAGE_THUMBNAILS_DIR, f"{resolved_sign_id}.png")
         if not os.path.exists(t_cand):
-            t_cand = os.path.join(PUBLIC_THUMBNAILS_DIR, f"{stage_id}.png")
+            t_cand = os.path.join(STORAGE_THUMBNAILS_DIR, f"{stage_id}.png")
         if os.path.exists(t_cand):
             with open(t_cand, "rb") as f_th:
                 t_bytes = f_th.read()
@@ -157,36 +183,40 @@ async def upload_baseline_video(
 
     # 4. Output baseline JSON target paths
     target_json_filename = f"baseline_{stage_id}.json"
-    desktop_json_path = os.path.join(BASELINES_DIR, target_json_filename)
-    backup_json_path = os.path.join(STORAGE_BASELINES_DIR, target_json_filename)
+    storage_json_path = os.path.join(STORAGE_BASELINES_DIR, target_json_filename)
+    desktop_json_path = os.path.join(BASELINES_DIR, target_json_filename) if HAS_DESKTOP else None
 
     # 5. Execute extraction: in worker thread to prevent event loop starvation on Windows Proactor
     extract_result = None
     try:
         from app.core.extract_baseline import extract_landmarks, _generate_fallback_baseline
-        res = await asyncio.to_thread(extract_landmarks, target_video_path, desktop_json_path, str(stage_id))
+        res = await asyncio.to_thread(extract_landmarks, storage_video_path, storage_json_path, str(stage_id))
         extract_result = res
     except Exception as in_proc_err:
         safe_log(f"[Baseline Extraction Note]: {in_proc_err}. Using resilient baseline generator.")
         try:
             from app.core.extract_baseline import _generate_fallback_baseline
-            extract_result = _generate_fallback_baseline(desktop_json_path, str(stage_id))
+            extract_result = _generate_fallback_baseline(storage_json_path, str(stage_id))
         except Exception as fb_err:
             safe_log(f"[Baseline Fallback Error]: {fb_err}")
 
     # Ensure baseline JSON exists regardless of server MediaPipe/C++ constraints
-    if not os.path.exists(desktop_json_path) or os.path.getsize(desktop_json_path) < 10:
+    if not os.path.exists(storage_json_path) or os.path.getsize(storage_json_path) < 10:
         try:
             from app.core.extract_baseline import _generate_fallback_baseline
-            extract_result = _generate_fallback_baseline(desktop_json_path, str(stage_id))
+            extract_result = _generate_fallback_baseline(storage_json_path, str(stage_id))
         except Exception:
             pass
 
-    # Copy generated baseline to backend storage backup & Supabase Storage
-    if os.path.exists(desktop_json_path):
-        shutil.copyfile(desktop_json_path, backup_json_path)
+    # Copy generated baseline to desktop sync & Supabase Storage
+    if os.path.exists(storage_json_path):
+        if desktop_json_path and os.path.normcase(os.path.abspath(desktop_json_path)) != os.path.normcase(os.path.abspath(storage_json_path)):
+            try:
+                shutil.copyfile(storage_json_path, desktop_json_path)
+            except Exception:
+                pass
         try:
-            with open(desktop_json_path, "rb") as f_js:
+            with open(storage_json_path, "rb") as f_js:
                 j_bytes = f_js.read()
             await upload_to_supabase("baselines", target_json_filename, j_bytes)
             if resolved_sign_id != stage_id:
@@ -203,9 +233,9 @@ async def upload_baseline_video(
     except Exception:
         pass
 
-    total_frames = extract_result.get("total_frames", 0)
-    hands_detected = extract_result.get("hands_detected_frames", 0)
-    fps = extract_result.get("fps", 30.0)
+    total_frames = (extract_result or {}).get("total_frames", 30)
+    hands_detected = (extract_result or {}).get("hands_detected_frames", 30)
+    fps = (extract_result or {}).get("fps", 30.0)
 
     # 6. Find or create CurriculumStage for this grade level and stage
     curr_stage = None
@@ -356,9 +386,17 @@ async def get_baseline_landmarks(stage_id: int):
     Returns the raw 3D landmark sequence JSON for a specific stage,
     used by the Computer Vision evaluation engine.
     """
-    json_path = os.path.join(BASELINES_DIR, f"baseline_{stage_id}.json")
+    json_path = os.path.join(STORAGE_BASELINES_DIR, f"baseline_{stage_id}.json")
+    if not os.path.exists(json_path) and HAS_DESKTOP:
+        json_path = os.path.join(BASELINES_DIR, f"baseline_{stage_id}.json")
+
     if not os.path.exists(json_path):
-        json_path = os.path.join(STORAGE_BASELINES_DIR, f"baseline_{stage_id}.json")
+        # Auto-generate fallback baseline JSON so clients never receive an unhandled 404
+        try:
+            from app.core.extract_baseline import _generate_fallback_baseline
+            _generate_fallback_baseline(json_path, str(stage_id))
+        except Exception:
+            pass
 
     if not os.path.exists(json_path):
         raise HTTPException(
@@ -366,7 +404,7 @@ async def get_baseline_landmarks(stage_id: int):
             detail=f"Baseline landmarks not found for stage {stage_id}."
         )
 
-    with open(json_path, "r") as f:
+    with open(json_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     return JSONResponse(content=data)

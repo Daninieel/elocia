@@ -19,15 +19,26 @@ import time
 from app.core.streak import get_effective_streak
 
 # Storage paths for cleanup & static visual aids
-PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
-PUBLIC_VIDEOS_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "frontend", "public", "videos")
-BASELINES_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "desktop", "baselines")
-STORAGE_VIDEOS_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "videos")
-STORAGE_BASELINES_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "baselines")
-PUBLIC_THUMBNAILS_DIR = os.path.join(PROJECT_ROOT, "apps", "student-desktop", "frontend", "public", "thumbnails")
-STORAGE_THUMBNAILS_DIR = os.path.join(PROJECT_ROOT, "backend", "storage", "thumbnails")
-os.makedirs(PUBLIC_THUMBNAILS_DIR, exist_ok=True)
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+STORAGE_DIR = os.path.join(BACKEND_DIR, "storage")
+STORAGE_VIDEOS_DIR = os.path.join(STORAGE_DIR, "videos")
+STORAGE_BASELINES_DIR = os.path.join(STORAGE_DIR, "baselines")
+STORAGE_THUMBNAILS_DIR = os.path.join(STORAGE_DIR, "thumbnails")
+
+candidate_root = os.path.abspath(os.path.join(BACKEND_DIR, ".."))
+HAS_DESKTOP = os.path.isdir(os.path.join(candidate_root, "apps", "student-desktop"))
+PROJECT_ROOT = candidate_root if HAS_DESKTOP else BACKEND_DIR
+
+PUBLIC_VIDEOS_DIR = os.path.join(candidate_root, "apps", "student-desktop", "frontend", "public", "videos") if HAS_DESKTOP else STORAGE_VIDEOS_DIR
+BASELINES_DIR = os.path.join(candidate_root, "apps", "student-desktop", "desktop", "baselines") if HAS_DESKTOP else STORAGE_BASELINES_DIR
+PUBLIC_THUMBNAILS_DIR = os.path.join(candidate_root, "apps", "student-desktop", "frontend", "public", "thumbnails") if HAS_DESKTOP else STORAGE_THUMBNAILS_DIR
+
 os.makedirs(STORAGE_THUMBNAILS_DIR, exist_ok=True)
+if HAS_DESKTOP:
+    try:
+        os.makedirs(PUBLIC_THUMBNAILS_DIR, exist_ok=True)
+    except Exception:
+        pass
 
 def resolve_sign_photo(sign_id: Optional[int], stage_id: Optional[int] = None, sign_name: Optional[str] = None) -> Optional[str]:
     """Resolve static visual aid image path for learners with mtime cache-busting."""
@@ -971,10 +982,14 @@ async def upload_curriculum_sign_photo(sign_id: str, photo: UploadFile = File(..
         saved_names.add(f"thumb_{b.sign_name}.png")
 
     for name in saved_names:
-        with open(os.path.join(PUBLIC_THUMBNAILS_DIR, name), "wb") as fp:
-            fp.write(photo_bytes)
         with open(os.path.join(STORAGE_THUMBNAILS_DIR, name), "wb") as fb:
             fb.write(photo_bytes)
+        if HAS_DESKTOP:
+            try:
+                with open(os.path.join(PUBLIC_THUMBNAILS_DIR, name), "wb") as fp:
+                    fp.write(photo_bytes)
+            except Exception:
+                pass
 
     # Cloud Sync: upload thumbnail to Supabase Storage (dual-mode)
     try:
