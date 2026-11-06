@@ -324,15 +324,15 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
         );
         const firstDate = new Date(chronological[0].created_at || "").getTime();
         const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-        const weekBuckets: Record<number, number[]> = { 0: [], 1: [], 2: [], 3: [] };
+        const weekBuckets: Record<number, EvaluationAttemptItem[]> = { 0: [], 1: [], 2: [], 3: [] };
 
         chronological.forEach((att) => {
           const attDate = new Date(att.created_at || "").getTime();
           const weekDiff = Math.max(0, Math.floor((attDate - firstDate) / msPerWeek));
           if (weekDiff < 4) {
-            weekBuckets[weekDiff].push(att.score_overall);
+            weekBuckets[weekDiff].push(att);
           } else {
-            weekBuckets[3].push(att.score_overall);
+            weekBuckets[3].push(att);
           }
         });
 
@@ -341,11 +341,39 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
         ).length;
 
         trendItems = [0, 1, 2, 3].map((wIdx) => {
-          const scoresInWeek = weekBuckets[wIdx];
-          const hasData = scoresInWeek.length > 0;
-          const avgScore = hasData
-            ? Math.round(scoresInWeek.reduce((acc, s) => acc + s, 0) / scoresInWeek.length)
-            : 0;
+          const attsInWeek = weekBuckets[wIdx];
+          const hasData = attsInWeek.length > 0;
+          let avgScore = 0;
+
+          if (hasData) {
+            // If all student activity falls into this single week, align directly with the dashboard's official stage average (83.3% -> 83%)
+            if (activeWeeksCount === 1 && summaryData?.avg_score) {
+              avgScore = Math.round(Number(summaryData.avg_score));
+            } else {
+              // Exact dashboard logic: Group by sign in this week and pick only the passed attempt (e.g. Tier 3 passed score)
+              const bySign: Record<string, EvaluationAttemptItem[]> = {};
+              attsInWeek.forEach((a) => {
+                const key = `${a.stage_id_new || a.stage_id || 1}_${a.sign_id || 1}`;
+                bySign[key] = bySign[key] || [];
+                bySign[key].push(a);
+              });
+
+              const passedScores: number[] = [];
+              Object.values(bySign).forEach((list) => {
+                const passed = list.filter((x) => x.passed && (x.tier_level || 1) < 4);
+                if (passed.length > 0) {
+                  passedScores.push(passed[passed.length - 1].score_overall);
+                } else if (list.length > 0) {
+                  passedScores.push(list[list.length - 1].score_overall);
+                }
+              });
+
+              avgScore = passedScores.length > 0
+                ? Math.round(passedScores.reduce((acc, s) => acc + s, 0) / passedScores.length)
+                : 0;
+            }
+          }
+
           const isCurrent = wIdx === activeWeeksCount - 1 || (wIdx === 0 && activeWeeksCount === 0);
           return {
             label: `Week ${wIdx + 1}`,
