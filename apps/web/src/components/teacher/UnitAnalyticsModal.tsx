@@ -230,12 +230,6 @@ export default function UnitAnalyticsModal({
             const d = await r1.json();
             if (d.drill && !createdDrill) createdDrill = d.drill;
           }
-          // Also broadcast
-          fetch(`${base}/analytics/drills/create`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...payload, student_id: "all" }),
-          }).catch(() => {});
         } catch (err) {
           console.warn(`Dispatch to ${base} failed:`, err);
         }
@@ -270,7 +264,6 @@ export default function UnitAnalyticsModal({
       const endpoints = Array.from(new Set([API_BASE_URL, "https://elocia.onrender.com", "http://localhost:8000"]));
       endpoints.forEach((base) => {
         fetch(`${base}/analytics/drills/student/${studentId}/cancel`, { method: "POST" }).catch(() => {});
-        fetch(`${base}/analytics/drills/student/all/cancel`, { method: "POST" }).catch(() => {});
       });
       setActiveDrill(null);
       setDrillSuccess(false);

@@ -363,7 +363,10 @@ export interface PracticeItem {
 }
 
 export async function fetchNeedsPractice(studentId?: string): Promise<PracticeItem[]> {
-  const sid = studentId && String(studentId).trim() ? String(studentId).trim() : 'all';
+  const sid = studentId && String(studentId).trim() ? String(studentId).trim() : '';
+  if (!sid || sid.toLowerCase() === 'all') {
+    return [];
+  }
   const colors: ('red' | 'orange' | 'green' | 'blue')[] = ['red', 'orange', 'green', 'blue'];
 
   const parseDrillResponse = (drill: any): PracticeItem[] => {
@@ -407,13 +410,6 @@ export async function fetchNeedsPractice(studentId?: string): Promise<PracticeIt
         }
       }
 
-      // 2. Check drills endpoint for broadcast ('all')
-      const drillAllRes = await fetch(`${baseUrl}/analytics/drills/student/all`);
-      if (drillAllRes.ok) {
-        const data = await drillAllRes.json();
-        const items = parseDrillResponse(data.drill);
-        if (items.length > 0) return items;
-      }
 
       // 3. Try needs-practice endpoint if sid is a valid UUID (avoids 422 error on Render)
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sid);
@@ -520,13 +516,6 @@ export async function completeFocusDrill(studentId: string, stageId?: number, si
         body: payload,
       });
     } catch {}
-    try {
-      await fetch(`${base}/analytics/drills/student/all/complete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      });
-    } catch {}
   }
 }
 
@@ -536,13 +525,6 @@ export async function removeFocusDrillSign(studentId: string, sign: string, stag
   for (const base of bases) {
     try {
       await fetch(`${base}/analytics/drills/student/${studentId}/remove-sign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: payload,
-      });
-    } catch {}
-    try {
-      await fetch(`${base}/analytics/drills/student/all/remove-sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,

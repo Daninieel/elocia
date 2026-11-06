@@ -675,7 +675,7 @@ async def get_student_unit_analytics(
         for r in rounds_data
     ]
 
-    active_drill = get_active_drill(str(student_id)) or get_active_drill(str(user.id)) or get_active_drill("all")
+    active_drill = get_active_drill(str(student_id)) or get_active_drill(str(user.id))
     if active_drill and not active_drill.get("active"):
         active_drill = None
 
@@ -715,7 +715,12 @@ async def create_focus_drill(payload: dict, db: AsyncSession = Depends(get_db)):
     If student_id is 'all' or empty, assigns globally to all students.
     """
     raw_sid = str(payload.get("student_id", "")).strip()
-    student_id = raw_sid if raw_sid and raw_sid != "all" else "all"
+    if not raw_sid or raw_sid.lower() in ("all", "none", "null"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="A valid student_id is required to create a targeted focus drill."
+        )
+    student_id = raw_sid
     signs = payload.get("signs", [])
     raw_stage_id = payload.get("stage_id", 1)
     stage_number = payload.get("stage_number") or raw_stage_id
@@ -806,12 +811,12 @@ async def remove_drill_sign(student_id: str, payload: dict):
     raw_stage_id = payload.get("stage_id")
     mark_sign_resolved(student_id=student_id, stage_id=raw_stage_id, sign_name=sign_to_remove)
 
-    for t in [str(student_id), "all"]:
-        drill = get_active_drill(t)
-        if drill:
-            drill["signs"] = [s for s in drill.get("signs", []) if str(s).strip().lower() != sign_to_remove]
-            if len(drill["signs"]) == 0:
-                clear_active_drill(t)
+    sid = str(student_id).strip()
+    drill = get_active_drill(sid)
+    if drill:
+        drill["signs"] = [s for s in drill.get("signs", []) if str(s).strip().lower() != sign_to_remove]
+        if len(drill["signs"]) == 0:
+            clear_active_drill(sid)
 
     return {"status": "success", "removed": sign_to_remove}
 

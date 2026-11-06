@@ -893,9 +893,11 @@ export default function EvaluationSession({ stageId, dynamicCurriculum, isPracti
       if (isPracticeModeRef.current || (focusDrillSigns && focusDrillSigns.length > 0)) {
         try {
           const student = JSON.parse(localStorage.getItem('elocia_current_student') || '{}');
-          completeFocusDrill(student.id || 'all', currentStageId, focusDrillSigns || []);
-        } catch {
-          completeFocusDrill('all', currentStageId, focusDrillSigns || []);
+          if (student?.id) {
+            completeFocusDrill(student.id, currentStageId, focusDrillSigns || []);
+          }
+        } catch (e) {
+          console.warn('Failed to complete focus drill:', e);
         }
       }
       onComplete(currentStageId);

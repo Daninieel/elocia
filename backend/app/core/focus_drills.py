@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _RESOLVED_FILE = os.path.join(_BASE_DIR, "database", "resolved_focus_drills.json")
 
-# In-memory stores
+# In-memory stores: student_id -> drill_record
 _ACTIVE_FOCUS_DRILLS: Dict[str, Any] = {}
 _RESOLVED_KEYS: Set[str] = set()
 
@@ -21,7 +21,12 @@ def _load_resolved_from_disk():
             with open(_RESOLVED_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 if isinstance(data, list):
-                    _RESOLVED_KEYS = set(data)
+                    # Only retain valid student-namespaced keys (exclude 'all' broadcasts)
+                    _RESOLVED_KEYS = {
+                        str(k).strip()
+                        for k in data
+                        if str(k).startswith("student:") and not str(k).startswith("student:all:")
+                    }
     except Exception as e:
         logger.warning(f"Could not load resolved focus drills from disk: {e}")
 
@@ -30,7 +35,7 @@ def _save_resolved_to_disk():
     try:
         os.makedirs(os.path.dirname(_RESOLVED_FILE), exist_ok=True)
         with open(_RESOLVED_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(_RESOLVED_KEYS), f, indent=2)
+            json.dump(sorted(list(_RESOLVED_KEYS)), f, indent=2)
     except Exception as e:
         logger.warning(f"Could not save resolved focus drills to disk: {e}")
 
@@ -40,23 +45,53 @@ _load_resolved_from_disk()
 
 
 def get_active_drill(student_id: str) -> Optional[dict]:
-    sid = str(student_id)
-    return _ACTIVE_FOCUS_DRILLS.get(sid) or _ACTIVE_FOCUS_DRILLS.get("all")
+    """
+    Returns the active focus drill strictly assigned to this specific student (or alias).
+    Never falls back to broadcast 'all' to prevent cross-account drill popups.
+    """
+    if not student_id:
+        return None
+    sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return None
+    return _ACTIVE_FOCUS_DRILLS.get(sid)
 
 
 def set_active_drill(student_id: str, drill_record: dict, aliases: Optional[List[str]] = None):
-    sid = str(student_id)
+    """
+    Saves an active drill specifically for the targeted student and any associated aliases.
+    Rejects setting drills on 'all' broadcast.
+    """
+    if not student_id:
+        return
+    sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return
+
     _ACTIVE_FOCUS_DRILLS[sid] = drill_record
     if aliases:
         for alias in aliases:
             if alias:
-                _ACTIVE_FOCUS_DRILLS[str(alias)] = drill_record
+                alias_str = str(alias).strip()
+                if alias_str and alias_str.lower() not in ("all", "none", "null"):
+                    _ACTIVE_FOCUS_DRILLS[alias_str] = drill_record
 
 
-def clear_active_drill(student_id: str):
-    sid = str(student_id)
+def clear_active_drill(student_id: str, aliases: Optional[List[str]] = None):
+    """
+    Clears the active drill strictly for the given student without affecting any other students.
+    """
+    if not student_id:
+        return
+    sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return
+
     _ACTIVE_FOCUS_DRILLS.pop(sid, None)
-    _ACTIVE_FOCUS_DRILLS.pop("all", None)
+    if aliases:
+        for alias in aliases:
+            if alias:
+                _ACTIVE_FOCUS_DRILLS.pop(str(alias).strip(), None)
 
 
 def mark_sign_resolved(
@@ -66,26 +101,26 @@ def mark_sign_resolved(
     sign_name: Optional[str] = None
 ):
     """
-    Marks a specific sign as resolved for a student (and universally).
+    Marks a specific sign as resolved strictly for this student.
+    Never registers global keys to avoid clearing struggles for other students.
     """
+    if not student_id:
+        return
     sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return
+
     keys_to_add = []
 
     if sign_name:
         s_clean = sign_name.strip().lower()
-        keys_to_add.append(f"sign_name:{s_clean}")
         keys_to_add.append(f"student:{sid}:sign_name:{s_clean}")
-        keys_to_add.append(f"all:sign_name:{s_clean}")
         if stage_id is not None:
-            keys_to_add.append(f"stage:{stage_id}:sign_name:{s_clean}")
             keys_to_add.append(f"student:{sid}:stage:{stage_id}:sign_name:{s_clean}")
 
     if sign_id is not None:
-        keys_to_add.append(f"sign_id:{sign_id}")
         keys_to_add.append(f"student:{sid}:sign_id:{sign_id}")
-        keys_to_add.append(f"all:sign_id:{sign_id}")
         if stage_id is not None:
-            keys_to_add.append(f"stage:{stage_id}:sign_id:{sign_id}")
             keys_to_add.append(f"student:{sid}:stage:{stage_id}:sign_id:{sign_id}")
 
     for k in keys_to_add:
@@ -100,21 +135,24 @@ def mark_drill_completed(
     signs: Optional[List[str]] = None
 ):
     """
-    Marks an entire focus drill / stage as completed and resolved.
-    Also clears any pending active drill.
+    Marks an entire focus drill / stage as completed and resolved strictly for this student.
+    Also clears their pending active drill.
     """
+    if not student_id:
+        return
     sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return
+
     if stage_id is not None:
-        _RESOLVED_KEYS.add(f"stage:{stage_id}")
         _RESOLVED_KEYS.add(f"student:{sid}:stage:{stage_id}")
-        _RESOLVED_KEYS.add(f"all:stage:{stage_id}")
 
     if signs:
         for s in signs:
             if s:
                 mark_sign_resolved(student_id=sid, stage_id=stage_id, sign_name=str(s))
 
-    # Clear active drill
+    # Clear active drill for this student only
     clear_active_drill(sid)
     _save_resolved_to_disk()
 
@@ -127,14 +165,18 @@ def is_sign_resolved(
     passed_practice_signs: Optional[Set[Any]] = None
 ) -> bool:
     """
-    Checks if a sign's Tier 4 struggle has been resolved either via:
+    Checks if a sign's Tier 4 struggle has been resolved strictly for this student via:
     1. A passed practice attempt in the database (passed_practice_signs).
-    2. Explicit registration in _RESOLVED_KEYS.
-    3. Stage-level resolution.
+    2. Explicit registration in _RESOLVED_KEYS with student:{sid}: prefix.
+    3. Student stage-level resolution.
     """
+    if not student_id:
+        return False
     sid = str(student_id).strip()
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return False
 
-    # 1. Check against DB passed practice signs
+    # 1. Check against DB passed practice signs for this student
     if passed_practice_signs:
         if sign_id is not None and (sign_id in passed_practice_signs or str(sign_id) in passed_practice_signs):
             return True
@@ -143,43 +185,29 @@ def is_sign_resolved(
             if s_clean in passed_practice_signs or sign_name in passed_practice_signs:
                 return True
 
-    # 2. Check stage-level resolution
+    # 2. Check student stage-level resolution
     if stage_id is not None:
-        if (
-            f"stage:{stage_id}" in _RESOLVED_KEYS or
-            f"student:{sid}:stage:{stage_id}" in _RESOLVED_KEYS or
-            f"all:stage:{stage_id}" in _RESOLVED_KEYS
-        ):
+        if f"student:{sid}:stage:{stage_id}" in _RESOLVED_KEYS:
             return True
 
-    # 3. Check sign_name keys
+    # 3. Check student sign_name keys
     if sign_name:
         s_clean = sign_name.strip().lower()
         candidates = [
-            f"sign_name:{s_clean}",
             f"student:{sid}:sign_name:{s_clean}",
-            f"all:sign_name:{s_clean}",
         ]
         if stage_id is not None:
-            candidates.extend([
-                f"stage:{stage_id}:sign_name:{s_clean}",
-                f"student:{sid}:stage:{stage_id}:sign_name:{s_clean}"
-            ])
+            candidates.append(f"student:{sid}:stage:{stage_id}:sign_name:{s_clean}")
         if any(c in _RESOLVED_KEYS for c in candidates):
             return True
 
-    # 4. Check sign_id keys
+    # 4. Check student sign_id keys
     if sign_id is not None:
         candidates = [
-            f"sign_id:{sign_id}",
             f"student:{sid}:sign_id:{sign_id}",
-            f"all:sign_id:{sign_id}",
         ]
         if stage_id is not None:
-            candidates.extend([
-                f"stage:{stage_id}:sign_id:{sign_id}",
-                f"student:{sid}:stage:{stage_id}:sign_id:{sign_id}"
-            ])
+            candidates.append(f"student:{sid}:stage:{stage_id}:sign_id:{sign_id}")
         if any(c in _RESOLVED_KEYS for c in candidates):
             return True
 
@@ -187,5 +215,13 @@ def is_sign_resolved(
 
 
 def get_resolved_keys_for_student(student_id: str) -> List[str]:
+    """
+    Returns resolved focus drill keys strictly belonging to this student.
+    """
+    if not student_id:
+        return []
     sid = str(student_id).strip()
-    return [k for k in _RESOLVED_KEYS if sid in k or k.startswith("all:") or not k.startswith("student:")]
+    if not sid or sid.lower() in ("all", "none", "null"):
+        return []
+    prefix = f"student:{sid}:"
+    return [k for k in _RESOLVED_KEYS if k.startswith(prefix)]

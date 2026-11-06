@@ -1,13 +1,5 @@
 [
-  "all:stage:1",
-  "student:f2a7e709-aa7c-4caf-82ef-faac3db7e35d:stage:1",
-  "stage:1",
-  "student:all:stage:1",
-  "stage:1:sign_name:a",
   "student:f2a7e709-aa7c-4caf-82ef-faac3db7e35d:sign_name:a",
-  "all:sign_name:a",
-  "student:all:sign_name:a",
-  "sign_name:a",
-  "student:f2a7e709-aa7c-4caf-82ef-faac3db7e35d:stage:1:sign_name:a",
-  "student:all:stage:1:sign_name:a"
+  "student:f2a7e709-aa7c-4caf-82ef-faac3db7e35d:stage:1",
+  "student:f2a7e709-aa7c-4caf-82ef-faac3db7e35d:stage:1:sign_name:a"
 ]
