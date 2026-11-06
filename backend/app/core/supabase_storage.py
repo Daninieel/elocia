@@ -2,6 +2,7 @@
 supabase_storage.py
 Handles dual-mode storage: uploads media and baselines to Supabase Storage ('elocia-media')
 while keeping local disk storage intact for fast offline playback and instant access.
+Includes memory-efficient disk-streaming upload to prevent Render 512MB RAM OOM.
 """
 
 import os
@@ -35,10 +36,52 @@ def get_public_url(folder: str, filename: str) -> str:
     clean_path = f"{folder.strip('/')}/{filename.strip('/')}"
     return f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_NAME}/{clean_path}"
 
+def upload_file_to_supabase_streaming_sync(folder: str, filename: str, file_path: str, content_type: Optional[str] = None) -> Optional[str]:
+    """
+    Streams a file from disk to Supabase Storage in 8KB chunks.
+    Consumes ~8 KB of RAM instead of buffering the entire file, preventing Render OOM.
+    """
+    if not SUPABASE_KEY or not SUPABASE_URL or not os.path.exists(file_path):
+        return None
+
+    clean_path = f"{folder.strip('/')}/{filename.strip('/')}"
+    url = f"{SUPABASE_URL}/storage/v1/object/{BUCKET_NAME}/{clean_path}"
+    mimetype = content_type or _get_mime_type(filename)
+    file_size = os.path.getsize(file_path)
+
+    for attempt in range(1, 4):
+        try:
+            with open(file_path, "rb") as f_in:
+                req = urllib.request.Request(
+                    url,
+                    data=f_in,
+                    headers={
+                        "Authorization": f"Bearer {SUPABASE_KEY}",
+                        "Content-Type": mimetype,
+                        "Content-Length": str(file_size),
+                        "x-upsert": "true",
+                    },
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=120) as response:
+                    if response.status in [200, 201]:
+                        return get_public_url(folder, filename)
+        except Exception as e:
+            if attempt == 3:
+                print(f"[Supabase Storage Warning] Could not stream-upload {clean_path} after 3 attempts: {e}")
+                return None
+            time.sleep(1.5 * attempt)
+
+    return None
+
+async def upload_file_to_supabase_streaming(folder: str, filename: str, file_path: str, content_type: Optional[str] = None) -> Optional[str]:
+    """Asynchronously streams a file from disk to Supabase Storage with zero RAM overhead."""
+    return await asyncio.to_thread(upload_file_to_supabase_streaming_sync, folder, filename, file_path, content_type)
+
 def upload_to_supabase_sync(folder: str, filename: str, data: bytes, content_type: Optional[str] = None) -> Optional[str]:
     """
     Synchronously uploads bytes to Supabase Storage with x-upsert: true and retries.
-    Returns the public URL on success, or None on failure.
+    Used for small payloads (JSON, small images).
     """
     if not SUPABASE_KEY or not SUPABASE_URL:
         return None

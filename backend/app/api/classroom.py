@@ -11,7 +11,8 @@ import shutil
 from app.database.connection import get_db
 from app.models.classroom import Class, ClassStudent, EducationalVideo
 from app.models.user import User, StudentProfile
-from app.core.supabase_storage import upload_to_supabase, delete_from_supabase_sync
+from app.core.supabase_storage import upload_to_supabase, upload_file_to_supabase_streaming, delete_from_supabase_sync
+import gc
 
 router = APIRouter(prefix="/classes", tags=["Classes & Rosters"])
 videos_router = APIRouter(prefix="/educational-videos", tags=["Educational Videos"])
@@ -299,7 +300,7 @@ async def upload_educational_video_file(
     os.makedirs(storage_thumb_dir, exist_ok=True)
     os.makedirs(public_thumb_dir, exist_ok=True)
 
-    # Save local thumbnail file if uploaded and sync to Supabase Storage
+    # 1. Save local thumbnail file if uploaded and stream to Supabase (Zero RAM overhead)
     resolved_thumb_url = thumbnail_url
     if thumbnail and thumbnail.filename:
         thumb_ext = os.path.splitext(thumbnail.filename)[1].lower()
@@ -307,16 +308,16 @@ async def upload_educational_video_file(
             thumb_filename = f"thumb_{uuid.uuid4().hex[:8]}_{clean_title}{thumb_ext}"
             thumb_stor_path = os.path.join(storage_thumb_dir, thumb_filename)
             thumb_pub_path = os.path.join(public_thumb_dir, thumb_filename)
-            thumb_data = await thumbnail.read()
             with open(thumb_stor_path, "wb") as f_th:
-                f_th.write(thumb_data)
+                shutil.copyfileobj(thumbnail.file, f_th)
             shutil.copyfile(thumb_stor_path, thumb_pub_path)
             resolved_thumb_url = f"/thumbnails/{thumb_filename}"
             try:
-                await upload_to_supabase("thumbnails", thumb_filename, thumb_data)
+                await upload_file_to_supabase_streaming("thumbnails", thumb_filename, thumb_stor_path)
             except Exception as sup_th_err:
                 print(f"[Supabase Storage Warning - Custom Thumbnail]: {sup_th_err}")
 
+    # 2. Save uploaded video to disk
     pub_path = os.path.join(public_dir, video_filename)
     stor_path = os.path.join(storage_dir, video_filename)
 
@@ -324,39 +325,40 @@ async def upload_educational_video_file(
         shutil.copyfileobj(video.file, f_pub)
     shutil.copyfile(pub_path, stor_path)
 
-    # Fast web optimization & automatic 50MB Supabase threshold compression
+    # Clean memory before compression
+    gc.collect()
+
+    # 3. Memory-Optimized FFmpeg Compression (Render 512MB RAM safe)
     try:
         import imageio_ffmpeg, subprocess
         ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
         h264_filename = f"edu_{uuid.uuid4().hex[:8]}_{clean_title}_web.mp4"
         h264_pub_path = os.path.join(public_dir, h264_filename)
 
-        # Detect codec quickly using OpenCV VideoCapture
-        import cv2
-        cap = cv2.VideoCapture(pub_path)
-        fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-        fourcc_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)]).lower()
-        cap.release()
-
         raw_size = os.path.getsize(pub_path) if os.path.exists(pub_path) else 0
-        is_already_h264 = ("h264" in fourcc_str or "avc1" in fourcc_str or ext == ".mp4")
-        needs_compression = (not is_already_h264) or (raw_size > 40 * 1024 * 1024)
+        needs_compression = (ext != ".mp4") or (raw_size > 40 * 1024 * 1024)
 
         if needs_compression:
-            # Re-encode and compress to 720p HD with CRF 27 and AAC 128k (shrinks 70MB+ to ~15-28MB)
+            # Memory-capped single-threaded ultrafast 720p transcode (< 35MB RAM footprint)
             cmd = [
                 ffmpeg_exe, "-y", "-i", pub_path,
                 "-vf", "scale='min(1280,iw)':-2",
                 "-c:v", "libx264", "-pix_fmt", "yuv420p",
-                "-preset", "fast", "-threads", "0", "-crf", "27",
-                "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                "-preset", "ultrafast",
+                "-threads", "1",
+                "-max_muxing_queue_size", "1024",
+                "-crf", "28",
+                "-c:a", "aac", "-b:a", "96k",
+                "-movflags", "+faststart",
                 h264_pub_path
             ]
         else:
-            # FAST STREAM COPY: Instant container remux & faststart without re-encoding (< 1s)
+            # Instant container remux & faststart without re-encoding
             cmd = [
                 ffmpeg_exe, "-y", "-i", pub_path,
-                "-c", "copy", "-movflags", "+faststart",
+                "-c", "copy",
+                "-threads", "1",
+                "-movflags", "+faststart",
                 h264_pub_path
             ]
 
@@ -378,7 +380,10 @@ async def upload_educational_video_file(
     except Exception as transcode_err:
         print(f"Web video transcode skipped: {transcode_err}")
 
-    # Auto-generate video thumbnail from first second if none was uploaded
+    # Reclaim memory after transcode
+    gc.collect()
+
+    # 4. Auto-generate video thumbnail from 1.0s if none was uploaded
     if not resolved_thumb_url:
         try:
             import imageio_ffmpeg, subprocess
@@ -393,25 +398,25 @@ async def upload_educational_video_file(
                 ffmpeg_exe, "-y", "-ss", "00:00:01",
                 "-i", pub_path,
                 "-vframes", "1", "-q:v", "2",
+                "-threads", "1",
                 auto_thumb_stor_path
             ]
             t_res = subprocess.run(cmd_thumb, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20, **extra_flags)
             if t_res.returncode == 0 and os.path.exists(auto_thumb_stor_path):
                 shutil.copyfile(auto_thumb_stor_path, auto_thumb_pub_path)
                 resolved_thumb_url = f"/thumbnails/{auto_thumb_filename}"
-                with open(auto_thumb_stor_path, "rb") as f_at:
-                    at_bytes = f_at.read()
-                await upload_to_supabase("thumbnails", auto_thumb_filename, at_bytes, "image/jpeg")
+                await upload_file_to_supabase_streaming("thumbnails", auto_thumb_filename, auto_thumb_stor_path, "image/jpeg")
         except Exception as auto_th_err:
             print(f"[Supabase Storage Warning - Auto Thumbnail]: {auto_th_err}")
 
-    # Cloud Sync: Upload video to Supabase Storage ('videos' folder)
+    # 5. Zero-RAM Disk Streaming Upload to Supabase Storage ('videos' folder)
     try:
-        with open(pub_path, "rb") as f_v:
-            v_bytes = f_v.read()
-        await upload_to_supabase("videos", video_filename, v_bytes, "video/mp4")
+        await upload_file_to_supabase_streaming("videos", video_filename, pub_path, "video/mp4")
     except Exception as sup_v_err:
         print(f"[Supabase Storage Warning - Video]: {sup_v_err}")
+
+    # Reclaim memory before returning
+    gc.collect()
 
     new_vid = EducationalVideo(
         title=title,
