@@ -346,32 +346,28 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
           let avgScore = 0;
 
           if (hasData) {
-            // If all student activity falls into this single week, align directly with the dashboard's official stage average (83.3% -> 83%)
-            if (activeWeeksCount === 1 && summaryData?.avg_score) {
-              avgScore = Math.round(Number(summaryData.avg_score));
-            } else {
-              // Exact dashboard logic: Group by sign in this week and pick only the passed attempt (e.g. Tier 3 passed score)
-              const bySign: Record<string, EvaluationAttemptItem[]> = {};
-              attsInWeek.forEach((a) => {
-                const key = `${a.stage_id_new || a.stage_id || 1}_${a.sign_id || 1}`;
-                bySign[key] = bySign[key] || [];
-                bySign[key].push(a);
-              });
+            // Group by sign in this week and pick only the passed attempt (e.g. Tier 3 passed score)
+            // This computes the student's true signing mastery for that week (matching the 4 parameter bars above: 85%)
+            const bySign: Record<string, EvaluationAttemptItem[]> = {};
+            attsInWeek.forEach((a) => {
+              const key = `${a.stage_id_new || a.stage_id || 1}_${a.sign_id || 1}`;
+              bySign[key] = bySign[key] || [];
+              bySign[key].push(a);
+            });
 
-              const passedScores: number[] = [];
-              Object.values(bySign).forEach((list) => {
-                const passed = list.filter((x) => x.passed && (x.tier_level || 1) < 4);
-                if (passed.length > 0) {
-                  passedScores.push(passed[passed.length - 1].score_overall);
-                } else if (list.length > 0) {
-                  passedScores.push(list[list.length - 1].score_overall);
-                }
-              });
+            const passedScores: number[] = [];
+            Object.values(bySign).forEach((list) => {
+              const passed = list.filter((x) => x.passed && (x.tier_level || 1) < 4);
+              if (passed.length > 0) {
+                passedScores.push(passed[passed.length - 1].score_overall);
+              } else if (list.length > 0) {
+                passedScores.push(list[list.length - 1].score_overall);
+              }
+            });
 
-              avgScore = passedScores.length > 0
-                ? Math.round(passedScores.reduce((acc, s) => acc + s, 0) / passedScores.length)
-                : 0;
-            }
+            avgScore = passedScores.length > 0
+              ? Math.round(passedScores.reduce((acc, s) => acc + s, 0) / passedScores.length)
+              : 0;
           }
 
           const isCurrent = wIdx === activeWeeksCount - 1 || (wIdx === 0 && activeWeeksCount === 0);
