@@ -9,6 +9,7 @@ import urllib.request
 import urllib.error
 import json
 import asyncio
+import time
 from typing import Optional
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://ovffqxjrokyuvlkmccup.supabase.co").rstrip("/")
@@ -36,7 +37,7 @@ def get_public_url(folder: str, filename: str) -> str:
 
 def upload_to_supabase_sync(folder: str, filename: str, data: bytes, content_type: Optional[str] = None) -> Optional[str]:
     """
-    Synchronously uploads bytes to Supabase Storage with x-upsert: true.
+    Synchronously uploads bytes to Supabase Storage with x-upsert: true and retries.
     Returns the public URL on success, or None on failure.
     """
     if not SUPABASE_KEY or not SUPABASE_URL:
@@ -57,14 +58,16 @@ def upload_to_supabase_sync(folder: str, filename: str, data: bytes, content_typ
         method="POST"
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            if response.status in [200, 201]:
-                return get_public_url(folder, filename)
-    except Exception as e:
-        # Graceful fallback: log and return None so local storage continues uninterrupted
-        print(f"[Supabase Storage Warning] Could not upload {clean_path}: {e}")
-        return None
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                if response.status in [200, 201]:
+                    return get_public_url(folder, filename)
+        except Exception as e:
+            if attempt == 3:
+                print(f"[Supabase Storage Warning] Could not upload {clean_path} after 3 attempts: {e}")
+                return None
+            time.sleep(1.5 * attempt)
 
     return None
 
@@ -92,12 +95,12 @@ def delete_from_supabase_sync(folder: str, filename: str) -> bool:
     )
 
     try:
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             return response.status in [200, 204]
     except Exception as e:
         print(f"[Supabase Storage Warning] Could not delete {clean_path}: {e}")
         return False
 
 async def delete_from_supabase(folder: str, filename: str) -> bool:
+    """Asynchronously deletes an object from Supabase Storage in an executor thread."""
     return await asyncio.to_thread(delete_from_supabase_sync, folder, filename)
-

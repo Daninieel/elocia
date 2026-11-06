@@ -3,7 +3,7 @@ import './Practice.css';
 import Sidebar from '../../components/Sidebar/Sidebar';
 import { CURRICULUM } from '../../data/curriculum';
 import type { Section } from '../../data/curriculum';
-import { fetchCurriculum, fetchStudentProgress, fetchEducationalVideos, fetchNeedsPractice, resolveMediaUrl } from '../../utils/api';
+import { fetchCurriculum, fetchStudentProgress, fetchEducationalVideos, fetchNeedsPractice, resolveMediaUrl, API_BASE } from '../../utils/api';
 import type { StudentProgress, EducationalVideoItem, PracticeItem } from '../../utils/api';
 
 // Assuming images are in public/images
@@ -693,7 +693,8 @@ export default function Practice({ onNavigate, onStartLesson, cachedCurriculum }
                   onError={() => setVideoError(true)}
                   style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                 >
-                  <source src={selectedVideo.video_url} type="video/mp4" />
+                  <source src={resolveMediaUrl(selectedVideo.video_url) || ''} type="video/mp4" />
+                  <source src={`${API_BASE}${selectedVideo.video_url}`} type="video/mp4" />
                   <source src={`http://127.0.0.1:8000${selectedVideo.video_url}`} type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
