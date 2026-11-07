@@ -47,10 +47,15 @@ interface ActiveDrillInfo {
 }
 
 interface TrendItem {
+  week_index?: number;
   label: string;
   score: number;
   is_current?: boolean;
   is_upcoming?: boolean;
+  date_range?: string;
+  parameters?: Array<{ name: string; key: string; value: number }>;
+  attempts_count?: number;
+  passed_signs_count?: number;
 }
 
 interface RoundItem {
@@ -91,6 +96,7 @@ export default function UnitAnalyticsModal({
   const [trend, setTrend] = useState<TrendItem[]>([]);
   const [rounds, setRounds] = useState<RoundItem[]>([]);
   const [selectedRound, setSelectedRound] = useState<RoundItem | null>(null);
+  const [selectedTrendWeek, setSelectedTrendWeek] = useState<number | null>(null);
   const [overallScore, setOverallScore] = useState<number>(78);
   const [drillSuccess, setDrillSuccess] = useState<boolean>(false);
   const [isCreatingDrill, setIsCreatingDrill] = useState<boolean>(false);
@@ -475,6 +481,22 @@ export default function UnitAnalyticsModal({
                     </span>
                   </div>
 
+                  {/* Week Selection Badge */}
+                  {selectedTrendWeek !== null && (
+                    <div className="flex items-center justify-between bg-orange-50 px-3 py-1.5 rounded-xl border border-orange-200">
+                      <span className="text-xs font-bold text-orange-700">
+                        Viewing Week {selectedTrendWeek + 1} Parameters ({trend.find(t => t.week_index === selectedTrendWeek)?.date_range || ""})
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTrendWeek(null)}
+                        className="text-xs font-bold text-orange-600 hover:text-orange-700 underline cursor-pointer"
+                      >
+                        Reset to Stage Mastery
+                      </button>
+                    </div>
+                  )}
+
                   <div className="space-y-4 pt-1">
                     {(selectedRound
                       ? [
@@ -483,6 +505,12 @@ export default function UnitAnalyticsModal({
                           { name: "Location", key: "location", score: selectedRound.score_location },
                           { name: "Movement", key: "movement", score: selectedRound.score_movement },
                         ]
+                      : selectedTrendWeek !== null && trend.find(t => t.week_index === selectedTrendWeek)?.parameters?.length
+                      ? (trend.find(t => t.week_index === selectedTrendWeek)!.parameters!).map(p => ({
+                          name: p.name,
+                          key: p.key,
+                          score: p.value
+                        }))
                       : parameters
                     ).map((param) => {
                       const colorClass =
@@ -711,44 +739,75 @@ export default function UnitAnalyticsModal({
                   </h3>
                 </div>
 
-                <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-6">
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-6 overflow-hidden">
                   {trend.length === 0 ? (
                     <div className="h-36 flex items-center justify-center text-xs font-semibold text-gray-400">
                       No evaluation attempts recorded yet for this student.
                     </div>
                   ) : (
-                    <div className="h-40 w-full flex items-end justify-between gap-3 sm:gap-6 px-2 pb-2">
-                      {trend.map((t, idx) => (
-                        <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full">
-                          <div
-                            className={`w-full rounded-2xl transition-all duration-500 ease-out flex items-center justify-center ${
-                              t.is_current
-                                ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800 text-white font-extrabold"
-                                : t.is_upcoming
-                                ? "bg-gray-100 border-2 border-dashed border-gray-200 text-gray-400 font-medium"
-                                : "bg-[#FBBF24]/85 text-gray-800 font-bold"
-                            }`}
-                            style={{
-                              height: t.is_upcoming
-                                ? "20%"
-                                : `${Math.min(100, Math.max(22, t.score))}%`,
-                            }}
-                          >
-                            {t.is_upcoming ? (
-                              <span className="text-[10px]">Upcoming</span>
-                            ) : (
-                              <span className="text-xs sm:text-sm drop-shadow-xs">
-                                {Math.round(t.score)}%
-                              </span>
-                            )}
-                          </div>
-                          <div className="mt-3 flex items-center justify-center gap-1.5 text-xs font-bold text-gray-600 whitespace-nowrap">
-                            <span className={t.is_current ? "text-[#FF8A00] font-extrabold" : ""}>
-                              {t.label}
-                            </span>
-                          </div>
-                        </div>
-                      ))}
+                    <div className="overflow-x-auto pb-2">
+                      <div className="h-40 flex items-end justify-between gap-3 sm:gap-6 px-2 pb-2 min-w-[420px]">
+                        {trend.map((t, idx) => {
+                          const wIdx = t.week_index ?? idx;
+                          const isSelected = selectedTrendWeek === wIdx;
+                          const isClickable = !t.is_upcoming && t.score > 0;
+
+                          return (
+                            <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full min-w-[65px]">
+                              <button
+                                type="button"
+                                disabled={!isClickable}
+                                onClick={() => {
+                                  if (isClickable) {
+                                    setSelectedTrendWeek(isSelected ? null : wIdx);
+                                  }
+                                }}
+                                className={`w-full rounded-2xl transition-all duration-300 flex items-center justify-center ${
+                                  isClickable ? "cursor-pointer" : "cursor-default"
+                                } ${
+                                  isSelected
+                                    ? "bg-[#FF8A00] shadow-xl ring-4 ring-orange-300 border-2 border-orange-700 scale-[1.03] text-white font-extrabold"
+                                    : t.is_current
+                                    ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800 text-white font-extrabold hover:scale-[1.02]"
+                                    : t.is_upcoming
+                                    ? "bg-gray-100 border-2 border-dashed border-gray-200 text-gray-400 font-medium"
+                                    : "bg-[#FBBF24]/85 text-gray-800 font-bold hover:bg-[#FBBF24] hover:scale-[1.02]"
+                                }`}
+                                style={{
+                                  height: t.is_upcoming
+                                    ? "20%"
+                                    : `${Math.min(100, Math.max(22, t.score))}%`,
+                                }}
+                                title={
+                                  t.is_upcoming
+                                    ? "Upcoming week - no practice recorded"
+                                    : `Click to view ${t.label} (${t.date_range || ""}) parameters`
+                                }
+                              >
+                                {t.is_upcoming ? (
+                                  <span className="text-[10px]">Upcoming</span>
+                                ) : (
+                                  <span className="text-xs sm:text-sm drop-shadow-xs">
+                                    {Math.round(t.score)}%
+                                  </span>
+                                )}
+                              </button>
+                              <div className="mt-3 flex flex-col items-center">
+                                <span className={`text-xs font-bold whitespace-nowrap ${
+                                  isSelected || t.is_current ? "text-[#FF8A00] font-extrabold" : "text-gray-600"
+                                }`}>
+                                  {t.label}
+                                </span>
+                                {t.date_range && (
+                                  <span className="text-[10px] text-gray-400 whitespace-nowrap mt-0.5">
+                                    {t.date_range}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>

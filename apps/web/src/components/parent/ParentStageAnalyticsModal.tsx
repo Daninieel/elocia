@@ -29,10 +29,15 @@ interface ParameterItem {
 }
 
 interface TrendItem {
+  week_index?: number;
   label: string;
   score: number;
   is_current?: boolean;
   is_upcoming?: boolean;
+  date_range?: string;
+  parameters?: Array<{ name: string; key: string; value: number }>;
+  attempts_count?: number;
+  passed_signs_count?: number;
 }
 
 interface RoundItem {
@@ -70,6 +75,7 @@ export default function ParentStageAnalyticsModal({
   const [trend, setTrend] = useState<TrendItem[]>([]);
   const [rounds, setRounds] = useState<RoundItem[]>([]);
   const [selectedRound, setSelectedRound] = useState<RoundItem | null>(null);
+  const [selectedTrendWeek, setSelectedTrendWeek] = useState<number | null>(null);
   const [overallScore, setOverallScore] = useState<number>(75);
   const [availableAttempts, setAvailableAttempts] = useState<AvailableAttemptItem[]>([]);
   const [activeAttemptNum, setActiveAttemptNum] = useState<number>(attemptNumber || 1);
@@ -353,33 +359,66 @@ export default function ParentStageAnalyticsModal({
                   </h3>
                 </div>
 
-                <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-5">
-                  <div className="h-36 w-full flex items-end justify-between gap-3 sm:gap-6 px-2 pb-2">
-                    {trend.map((t, idx) => (
-                      <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full">
-                        <div
-                          className={`w-full rounded-2xl transition-all duration-500 ease-out flex items-center justify-center ${
-                            t.is_current
-                              ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800 text-white font-extrabold"
-                              : t.is_upcoming
-                              ? "bg-gray-100 border-2 border-dashed border-gray-200 text-gray-400 font-medium"
-                              : "bg-[#FBBF24]/85 text-gray-800 font-bold"
-                          }`}
-                          style={{
-                            height: t.is_upcoming ? "20%" : `${Math.min(100, Math.max(22, t.score))}%`,
-                          }}
-                        >
-                          {t.is_upcoming ? (
-                            <span className="text-[10px]">Upcoming</span>
-                          ) : (
-                            <span className="text-xs sm:text-sm drop-shadow-xs">{Math.round(t.score)}%</span>
-                          )}
-                        </div>
-                        <div className="mt-2.5 flex items-center justify-center text-xs font-bold text-gray-600 whitespace-nowrap">
-                          <span className={t.is_current ? "text-[#FF8A00] font-extrabold" : ""}>{t.label}</span>
-                        </div>
-                      </div>
-                    ))}
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/50 p-5 overflow-hidden">
+                  <div className="overflow-x-auto pb-2">
+                    <div className="h-36 flex items-end justify-between gap-3 sm:gap-6 px-2 pb-2 min-w-[420px]">
+                      {trend.map((t, idx) => {
+                        const wIdx = t.week_index ?? idx;
+                        const isSelected = selectedTrendWeek === wIdx;
+                        const isClickable = !t.is_upcoming && t.score > 0;
+
+                        return (
+                          <div key={idx} className="flex-1 flex flex-col items-center justify-end h-full min-w-[65px]">
+                            <button
+                              type="button"
+                              disabled={!isClickable}
+                              onClick={() => {
+                                if (isClickable) {
+                                  setSelectedTrendWeek(isSelected ? null : wIdx);
+                                }
+                              }}
+                              className={`w-full rounded-2xl transition-all duration-300 flex items-center justify-center ${
+                                isClickable ? "cursor-pointer" : "cursor-default"
+                              } ${
+                                isSelected
+                                  ? "bg-[#FF8A00] shadow-xl ring-4 ring-orange-300 border-2 border-orange-700 scale-[1.03] text-white font-extrabold"
+                                  : t.is_current
+                                  ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800 text-white font-extrabold hover:scale-[1.02]"
+                                  : t.is_upcoming
+                                  ? "bg-gray-100 border-2 border-dashed border-gray-200 text-gray-400 font-medium"
+                                  : "bg-[#FBBF24]/85 text-gray-800 font-bold hover:bg-[#FBBF24] hover:scale-[1.02]"
+                              }`}
+                              style={{
+                                height: t.is_upcoming ? "20%" : `${Math.min(100, Math.max(22, t.score))}%`,
+                              }}
+                              title={
+                                t.is_upcoming
+                                  ? "Upcoming week - no practice recorded"
+                                  : `Click to view ${t.label} (${t.date_range || ""}) parameters`
+                              }
+                            >
+                              {t.is_upcoming ? (
+                                <span className="text-[10px]">Upcoming</span>
+                              ) : (
+                                <span className="text-xs sm:text-sm drop-shadow-xs">{Math.round(t.score)}%</span>
+                              )}
+                            </button>
+                            <div className="mt-2.5 flex flex-col items-center">
+                              <span className={`text-xs font-bold whitespace-nowrap ${
+                                isSelected || t.is_current ? "text-[#FF8A00] font-extrabold" : "text-gray-600"
+                              }`}>
+                                {t.label}
+                              </span>
+                              {t.date_range && (
+                                <span className="text-[10px] text-gray-400 whitespace-nowrap mt-0.5">
+                                  {t.date_range}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

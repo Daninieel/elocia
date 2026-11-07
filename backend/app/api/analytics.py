@@ -532,40 +532,85 @@ async def get_student_unit_analytics(
                 "reason": f"Flagged in Tier {t4_att.tier_level or 4} Pass-and-Flag"
             })
 
-    # 100% Real Performance Trend (Week 1, Week 2, Week 3, Week 4)
-    # Calculated from real DB attempts matching the Parent portal calendar week grouping!
+    # 100% Real Incrementing Performance Trend (Weeks 1..N) with Weekly Parameters
     trend = []
     valid_chrono = sorted([a for a in attempts if a.score_overall is not None and a.score_overall > 0], key=lambda x: x.created_at)
     if valid_chrono:
         first_date = valid_chrono[0].created_at
-        week_buckets = {0: [], 1: [], 2: [], 3: []}
+        from datetime import datetime, timezone, timedelta
         
+        week_buckets = {}
         for a in valid_chrono:
-            diff_days = (a.created_at - first_date).days if hasattr(a.created_at, 'days') else max(0, int((a.created_at - first_date).total_seconds() // (7 * 24 * 3600)))
-            w_idx = min(3, max(0, diff_days))
-            week_buckets[w_idx].append(a.score_overall)
+            if hasattr(a.created_at, 'timestamp') and a.created_at:
+                diff_sec = (a.created_at - first_date).total_seconds()
+            else:
+                diff_sec = 0
+            w_idx = max(0, int(diff_sec // (7 * 24 * 3600)))
+            week_buckets.setdefault(w_idx, []).append(a)
 
-        active_weeks = [w for w in range(4) if len(week_buckets[w]) > 0]
-        latest_active_week = max(active_weeks) if active_weeks else 0
+        # Dynamic horizon: at least 4 weeks, and at least current calendar week + 2 upcoming
+        now_dt = datetime.now(timezone.utc)
+        if first_date.tzinfo:
+            now_diff = max(0, (now_dt - first_date).total_seconds())
+        else:
+            now_diff = max(0, (datetime.utcnow() - first_date).total_seconds())
+        curr_cal_w = int(now_diff // (7 * 24 * 3600))
+        highest_active_w = max([w for w, atts in week_buckets.items() if len(atts) > 0], default=0)
+        total_weeks = max(4, highest_active_w + 2, curr_cal_w + 2)
 
-        for w in range(4):
-            scores = week_buckets[w]
-            has_data = len(scores) > 0
-            avg_score = round(sum(scores) / len(scores), 1) if has_data else 0.0
-            is_current = (w == latest_active_week) and has_data
+        for w in range(total_weeks):
+            atts_in_w = week_buckets.get(w, [])
+            has_data = len(atts_in_w) > 0
+            
+            w_start = first_date + timedelta(days=w * 7)
+            w_end = w_start + timedelta(days=6)
+            date_range_str = f"{w_start.strftime('%b %d')} - {w_end.strftime('%b %d')}"
+
+            # Group by sign and select passed attempt (or latest attempt)
+            by_sign = {}
+            for a in atts_in_w:
+                key = f"{a.stage_id_new or a.stage_id or 1}_{a.sign_id or 1}"
+                by_sign.setdefault(key, []).append(a)
+
+            passed_scores = []
+            param_h, param_p, param_l, param_m = [], [], [], []
+            for s_atts in by_sign.values():
+                p = [x for x in s_atts if x.passed and (x.tier_level or 1) < 4]
+                chosen = p[-1] if p else s_atts[-1]
+                passed_scores.append(chosen.score_overall or 0.0)
+                if chosen.score_handshape is not None: param_h.append(chosen.score_handshape)
+                if chosen.score_palm_orientation is not None: param_p.append(chosen.score_palm_orientation)
+                if chosen.score_location is not None: param_l.append(chosen.score_location)
+                if chosen.score_movement is not None: param_m.append(chosen.score_movement)
+
+            avg_score = round(sum(passed_scores) / len(passed_scores), 1) if passed_scores else 0.0
+            
+            w_params = [
+                {"name": "Handshape", "key": "handshape", "value": round(sum(param_h) / len(param_h)) if param_h else 0},
+                {"name": "Palm Orientation", "key": "palm_orientation", "value": round(sum(param_p) / len(param_p)) if param_p else 0},
+                {"name": "Location", "key": "location", "value": round(sum(param_l) / len(param_l)) if param_l else 0},
+                {"name": "Movement", "key": "movement", "value": round(sum(param_m) / len(param_m)) if param_m else 0},
+            ]
+
+            is_current = (w == highest_active_w) and has_data
 
             trend.append({
+                "week_index": w,
                 "label": f"Week {w + 1}",
                 "score": avg_score,
                 "is_current": is_current,
-                "is_upcoming": not has_data
+                "is_upcoming": not has_data,
+                "date_range": date_range_str,
+                "parameters": w_params,
+                "attempts_count": len(atts_in_w),
+                "passed_signs_count": len(passed_scores)
             })
     else:
         trend = [
-            {"label": "Week 1", "score": 0.0, "is_current": True, "is_upcoming": True},
-            {"label": "Week 2", "score": 0.0, "is_current": False, "is_upcoming": True},
-            {"label": "Week 3", "score": 0.0, "is_current": False, "is_upcoming": True},
-            {"label": "Week 4", "score": 0.0, "is_current": False, "is_upcoming": True},
+            {"week_index": 0, "label": "Week 1", "score": 0.0, "is_current": True, "is_upcoming": True, "parameters": []},
+            {"week_index": 1, "label": "Week 2", "score": 0.0, "is_current": False, "is_upcoming": True, "parameters": []},
+            {"week_index": 2, "label": "Week 3", "score": 0.0, "is_current": False, "is_upcoming": True, "parameters": []},
+            {"week_index": 3, "label": "Week 4", "score": 0.0, "is_current": False, "is_upcoming": True, "parameters": []},
         ]
 
     # Construct detailed rounds breakdown for this stage

@@ -37,7 +37,10 @@ export interface ParentDashboardContextValue {
   stats: DashboardStats;
   stagePath: StagePathItem[];
   parameterMastery: ParameterMasteryItem[];
+  cumulativeParameterMastery: ParameterMasteryItem[];
   performanceTrend: PerformanceTrendItem[];
+  selectedWeekIndex: number | null;
+  setSelectedWeekIndex: (idx: number | null) => void;
   needsPractice: PracticeCardItem[];
   achievements: AchievementItem[];
   sections: any[];
@@ -104,6 +107,7 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
     return cid ? _cache.metricsByChildId[cid]?.rawCurriculum || null : null;
   });
   const [activeSectionIndex, setActiveSectionIndex] = useState<number>(0);
+  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number | null>(null);
 
   const [stagePath, setStagePath] = useState<StagePathItem[]>(() => {
     const cid = _cache.selectedChildId;
@@ -316,7 +320,7 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
       }
       setParameterMastery(newParams);
 
-      // Performance Trend
+      // Performance Trend (Dynamic Incrementing Weeks & Weekly Parameters)
       let trendItems: PerformanceTrendItem[] = [];
       if (validAttempts.length > 0) {
         const chronological = [...validAttempts].sort(
@@ -324,30 +328,41 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
         );
         const firstDate = new Date(chronological[0].created_at || "").getTime();
         const msPerWeek = 7 * 24 * 60 * 60 * 1000;
-        const weekBuckets: Record<number, EvaluationAttemptItem[]> = { 0: [], 1: [], 2: [], 3: [] };
+        const weekBuckets: Record<number, EvaluationAttemptItem[]> = {};
 
         chronological.forEach((att) => {
           const attDate = new Date(att.created_at || "").getTime();
           const weekDiff = Math.max(0, Math.floor((attDate - firstDate) / msPerWeek));
-          if (weekDiff < 4) {
-            weekBuckets[weekDiff].push(att);
-          } else {
-            weekBuckets[3].push(att);
-          }
+          weekBuckets[weekDiff] = weekBuckets[weekDiff] || [];
+          weekBuckets[weekDiff].push(att);
         });
 
-        const activeWeeksCount = Object.keys(weekBuckets).filter(
-          (w) => weekBuckets[Number(w)].length > 0
-        ).length;
+        const activeWeekIndices = Object.keys(weekBuckets)
+          .map(Number)
+          .filter((w) => weekBuckets[w].length > 0);
+        const highestActiveWeek = activeWeekIndices.length > 0 ? Math.max(...activeWeekIndices) : 0;
+        
+        // Dynamic Horizon: at least 4 weeks, and at least current calendar week + 2 upcoming
+        const nowMs = Date.now();
+        const currentCalWeek = Math.max(0, Math.floor((nowMs - firstDate) / msPerWeek));
+        const totalWeeks = Math.max(4, highestActiveWeek + 2, currentCalWeek + 2);
 
-        trendItems = [0, 1, 2, 3].map((wIdx) => {
-          const attsInWeek = weekBuckets[wIdx];
+        trendItems = Array.from({ length: totalWeeks }, (_, wIdx) => {
+          const attsInWeek = weekBuckets[wIdx] || [];
           const hasData = attsInWeek.length > 0;
           let avgScore = 0;
 
+          const wStart = new Date(firstDate + wIdx * msPerWeek);
+          const wEnd = new Date(firstDate + (wIdx + 1) * msPerWeek - 1000);
+          const startMonth = wStart.toLocaleString("en-US", { month: "short" });
+          const endMonth = wEnd.toLocaleString("en-US", { month: "short" });
+          const dateRange = startMonth === endMonth
+            ? `${startMonth} ${wStart.getDate()} - ${wEnd.getDate()}`
+            : `${startMonth} ${wStart.getDate()} - ${endMonth} ${wEnd.getDate()}`;
+
+          let weekParams: ParameterMasteryItem[] = [];
+
           if (hasData) {
-            // Group by sign in this week and pick only the passed attempt (e.g. Tier 3 passed score)
-            // This computes the student's true signing mastery for that week (matching the 4 parameter bars above: 85%)
             const bySign: Record<string, EvaluationAttemptItem[]> = {};
             attsInWeek.forEach((a) => {
               const key = `${a.stage_id_new || a.stage_id || 1}_${a.sign_id || 1}`;
@@ -356,34 +371,51 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
             });
 
             const passedScores: number[] = [];
+            const paramH: number[] = [];
+            const paramP: number[] = [];
+            const paramL: number[] = [];
+            const paramM: number[] = [];
+
             Object.values(bySign).forEach((list) => {
               const passed = list.filter((x) => x.passed && (x.tier_level || 1) < 4);
-              if (passed.length > 0) {
-                passedScores.push(passed[passed.length - 1].score_overall);
-              } else if (list.length > 0) {
-                passedScores.push(list[list.length - 1].score_overall);
-              }
+              const chosen = passed.length > 0 ? passed[passed.length - 1] : list[list.length - 1];
+              passedScores.push(chosen.score_overall);
+              if (chosen.score_handshape != null) paramH.push(chosen.score_handshape);
+              if (chosen.score_palm_orientation != null) paramP.push(chosen.score_palm_orientation);
+              if (chosen.score_location != null) paramL.push(chosen.score_location);
+              if (chosen.score_movement != null) paramM.push(chosen.score_movement);
             });
 
             avgScore = passedScores.length > 0
               ? Math.round(passedScores.reduce((acc, s) => acc + s, 0) / passedScores.length)
               : 0;
+
+            weekParams = [
+              { name: "Handshape", key: "handshape", value: paramH.length ? Math.round(paramH.reduce((a, b) => a + b, 0) / paramH.length) : 0 },
+              { name: "Palm Orientation", key: "palm_orientation", value: paramP.length ? Math.round(paramP.reduce((a, b) => a + b, 0) / paramP.length) : 0 },
+              { name: "Location", key: "location", value: paramL.length ? Math.round(paramL.reduce((a, b) => a + b, 0) / paramL.length) : 0 },
+              { name: "Movement", key: "movement", value: paramM.length ? Math.round(paramM.reduce((a, b) => a + b, 0) / paramM.length) : 0 },
+            ];
           }
 
-          const isCurrent = wIdx === activeWeeksCount - 1 || (wIdx === 0 && activeWeeksCount === 0);
+          const isCurrent = (wIdx === highestActiveWeek) && hasData;
           return {
+            weekIndex: wIdx,
             label: `Week ${wIdx + 1}`,
             score: avgScore,
-            isCurrent: hasData && isCurrent,
+            isCurrent,
             isUpcoming: !hasData,
+            dateRange,
+            parameters: weekParams,
+            attemptsCount: attsInWeek.length,
           };
         });
       } else {
         trendItems = [
-          { label: "Week 1", score: 0, isCurrent: true, isUpcoming: true },
-          { label: "Week 2", score: 0, isUpcoming: true },
-          { label: "Week 3", score: 0, isUpcoming: true },
-          { label: "Week 4", score: 0, isUpcoming: true },
+          { weekIndex: 0, label: "Week 1", score: 0, isCurrent: true, isUpcoming: true, parameters: [] },
+          { weekIndex: 1, label: "Week 2", score: 0, isUpcoming: true, parameters: [] },
+          { weekIndex: 2, label: "Week 3", score: 0, isUpcoming: true, parameters: [] },
+          { weekIndex: 3, label: "Week 4", score: 0, isUpcoming: true, parameters: [] },
         ];
       }
       setPerformanceTrend(trendItems);
@@ -495,6 +527,16 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
     return uniqueSecs;
   }, [rawCurriculum]);
 
+  const activeParameterMastery = useMemo(() => {
+    if (selectedWeekIndex !== null) {
+      const matched = performanceTrend.find((item) => item.weekIndex === selectedWeekIndex);
+      if (matched && matched.parameters && matched.parameters.length > 0) {
+        return matched.parameters;
+      }
+    }
+    return parameterMastery;
+  }, [selectedWeekIndex, performanceTrend, parameterMastery]);
+
   const value = useMemo<ParentDashboardContextValue>(
     () => ({
       parentName,
@@ -505,8 +547,11 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
       scores,
       stats,
       stagePath,
-      parameterMastery,
+      parameterMastery: activeParameterMastery,
+      cumulativeParameterMastery: parameterMastery,
       performanceTrend,
+      selectedWeekIndex,
+      setSelectedWeekIndex,
       needsPractice,
       achievements,
       sections,
@@ -526,8 +571,11 @@ export const ParentDashboardProvider: React.FC<{ children: React.ReactNode }> = 
       scores,
       stats,
       stagePath,
+      activeParameterMastery,
       parameterMastery,
       performanceTrend,
+      selectedWeekIndex,
+      setSelectedWeekIndex,
       needsPractice,
       achievements,
       sections,

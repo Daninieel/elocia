@@ -67,10 +67,15 @@ export interface ParameterMasteryItem {
 }
 
 export interface PerformanceTrendItem {
+  weekIndex?: number;
   label: string;
   score: number;
   isCurrent?: boolean;
   isUpcoming?: boolean;
+  dateRange?: string;
+  parameters?: ParameterMasteryItem[];
+  attemptsCount?: number;
+  passedSignsCount?: number;
 }
 
 export interface StagePathItem {

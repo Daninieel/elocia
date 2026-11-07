@@ -2,8 +2,19 @@ import TopHeaderBar from "@/components/parent/TopHeaderBar";
 import { useParentDashboard } from "@/hooks/useParentDashboard";
 
 export default function ParentProgressPage() {
-  const { parameterMastery, performanceTrend, loading, error, selectedChild } =
-    useParentDashboard();
+  const {
+    parameterMastery,
+    performanceTrend,
+    selectedWeekIndex,
+    setSelectedWeekIndex,
+    loading,
+    error,
+    selectedChild,
+  } = useParentDashboard();
+
+  const selectedWeek = selectedWeekIndex !== null
+    ? performanceTrend.find((item) => item.weekIndex === selectedWeekIndex)
+    : null;
 
   if (loading) {
     return (
@@ -40,11 +51,30 @@ export default function ParentProgressPage() {
       <TopHeaderBar />
 
       <main className="px-4 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-6 sm:space-y-8 max-w-7xl mx-auto">
-        {/* Section 1: Parameter Mastery */}
+        {/* Section 1: Parameter Mastery (Interactive with Weekly Trend) */}
         <section className="space-y-3">
-          <h2 className="text-xl font-bold text-gray-900 tracking-tight">
-            Parameter Mastery
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">
+                Parameter Mastery
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {selectedWeek
+                  ? `Showing parameter mastery for ${selectedWeek.label} (${selectedWeek.dateRange || "Selected Week"})`
+                  : "Showing cumulative all-time parameter mastery across mastered signs"}
+              </p>
+            </div>
+            {selectedWeek && (
+              <button
+                type="button"
+                onClick={() => setSelectedWeekIndex(null)}
+                className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-orange-50 text-orange-700 text-xs font-bold border border-orange-200 hover:bg-orange-100 transition-colors cursor-pointer shadow-xs"
+              >
+                <span>Reset to All-Time Mastery</span>
+                <span className="font-extrabold text-sm leading-none">&times;</span>
+              </button>
+            )}
+          </div>
 
           <div className="bg-white rounded-3xl p-5 sm:p-8 border border-gray-100 shadow-sm space-y-6">
             {parameterMastery.map((param) => (
@@ -70,65 +100,107 @@ export default function ParentProgressPage() {
           </div>
         </section>
 
-        {/* Section 2: Performance Trend (Stepped Bar Chart Matching Figma) */}
+        {/* Section 2: Performance Trend (Incrementing Weeks & Interactive Selection) */}
         <section className="space-y-3">
-          <h2 className="text-xl font-bold text-gray-900 tracking-tight">
-            Performance Trend
-          </h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 tracking-tight">
+                Performance Trend
+              </h2>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Click any active week bar to filter parameter mastery specifically for that week.
+              </p>
+            </div>
+            {selectedWeekIndex !== null && (
+              <span className="px-3 py-1 rounded-full bg-[#FF8A00] text-white text-xs font-bold shadow-xs">
+                {selectedWeek?.label} Active
+              </span>
+            )}
+          </div>
 
-          <div className="bg-white rounded-3xl p-8 border border-gray-100 shadow-sm">
-            {/* Chart Area */}
+          <div className="bg-white rounded-3xl p-6 sm:p-8 border border-gray-100 shadow-sm overflow-hidden">
+            {/* Chart Area with Horizontal Scroll for Incrementing Weeks */}
             {performanceTrend.length > 0 ? (
-              <div className="h-72 w-full flex items-end justify-center gap-1 sm:gap-2 px-4 pt-8 pb-4">
-                {performanceTrend.map((item) => (
-                  <div
-                    key={item.label}
-                    className="flex-1 flex flex-col items-center justify-end h-full max-w-xs"
-                  >
-                    {/* Stepped Bar */}
-                    <div
-                      className={`w-full rounded-t-2xl transition-all duration-700 ease-out flex items-center justify-center ${
-                        item.isCurrent
-                          ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800"
-                          : item.isUpcoming
-                          ? "bg-gray-100 border-2 border-dashed border-gray-200"
-                          : "bg-[#FBBF24]/75 hover:bg-[#FBBF24]"
-                      }`}
-                      style={{
-                        height: item.isUpcoming
-                          ? "20%"
-                          : `${Math.min(100, Math.max(15, item.score))}%`,
-                      }}
-                    >
-                      {item.isCurrent ? (
-                        <span className="text-white font-extrabold text-sm sm:text-base drop-shadow-xs">
-                          {item.score}%
-                        </span>
-                      ) : !item.isUpcoming ? (
-                        <span className="text-gray-700 font-extrabold text-xs sm:text-sm">
-                          {item.score}%
-                        </span>
-                      ) : (
-                        <span className="text-[11px] font-semibold text-gray-400">
-                          Upcoming
-                        </span>
-                      )}
-                    </div>
+              <div className="overflow-x-auto pb-2">
+                <div className="h-72 flex items-end justify-center gap-2 sm:gap-4 px-2 pt-8 pb-4 min-w-[500px]">
+                  {performanceTrend.map((item) => {
+                    const isSelected = selectedWeekIndex === item.weekIndex;
+                    const isClickable = !item.isUpcoming && (item.attemptsCount ? item.attemptsCount > 0 : item.score > 0);
 
-                    {/* X-axis Label below bar */}
-                    <span
-                      className={`mt-3 text-xs sm:text-sm font-semibold tracking-wide ${
-                        item.isCurrent
-                          ? "text-[#FF8A00] font-extrabold"
-                          : item.isUpcoming
-                          ? "text-gray-400"
-                          : "text-gray-700 font-bold"
-                      }`}
-                    >
-                      {item.label}
-                    </span>
-                  </div>
-                ))}
+                    return (
+                      <div
+                        key={item.label}
+                        className="flex-1 flex flex-col items-center justify-end h-full max-w-xs min-w-[70px]"
+                      >
+                        {/* Stepped Bar Button */}
+                        <button
+                          type="button"
+                          disabled={!isClickable}
+                          onClick={() => {
+                            if (isClickable) {
+                              setSelectedWeekIndex(isSelected ? null : (item.weekIndex ?? null));
+                            }
+                          }}
+                          className={`w-full rounded-t-2xl transition-all duration-300 flex items-center justify-center ${
+                            isClickable ? "cursor-pointer" : "cursor-default"
+                          } ${
+                            isSelected
+                              ? "bg-[#FF8A00] shadow-xl ring-4 ring-orange-300 border-2 border-orange-700 scale-[1.03] text-white"
+                              : item.isCurrent
+                              ? "bg-[#FF8A00] shadow-md border-b-4 border-amber-800 text-white hover:scale-[1.02]"
+                              : item.isUpcoming
+                              ? "bg-gray-100 border-2 border-dashed border-gray-200 text-gray-400"
+                              : "bg-[#FBBF24]/75 hover:bg-[#FBBF24] hover:scale-[1.02] text-gray-800"
+                          }`}
+                          style={{
+                            height: item.isUpcoming
+                              ? "20%"
+                              : `${Math.min(100, Math.max(15, item.score))}%`,
+                          }}
+                          title={
+                            item.isUpcoming
+                              ? "Upcoming week - no practice sessions recorded yet"
+                              : `Click to view ${item.label} (${item.dateRange || ""}) parameter mastery`
+                          }
+                        >
+                          {item.isCurrent || isSelected ? (
+                            <span className="text-white font-extrabold text-sm sm:text-base drop-shadow-xs">
+                              {item.score}%
+                            </span>
+                          ) : !item.isUpcoming ? (
+                            <span className="text-gray-700 font-extrabold text-xs sm:text-sm">
+                              {item.score}%
+                            </span>
+                          ) : (
+                            <span className="text-[11px] font-semibold text-gray-400">
+                              Upcoming
+                            </span>
+                          )}
+                        </button>
+
+                        {/* X-axis Label below bar */}
+                        <div className="mt-3 flex flex-col items-center">
+                          <span
+                            className={`text-xs sm:text-sm font-semibold tracking-wide ${
+                              isSelected || item.isCurrent
+                                ? "text-[#FF8A00] font-extrabold"
+                                : item.isUpcoming
+                                ? "text-gray-400"
+                                : "text-gray-700 font-bold"
+                            }`}
+                          >
+                            {item.label}
+                          </span>
+                          {item.dateRange && (
+                            <span className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">
+                              {item.dateRange}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : (
               <div className="h-64 w-full flex flex-col items-center justify-center p-8 text-center">
