@@ -14,7 +14,7 @@ import Practice from './pages/Practice/Practice';
 import PuzzleSign from './pages/Mini Games/Puzzle Sign';
 import SeeItSignIt from './pages/Mini Games/SeeItSignIt';
 import MagicFingers from './pages/Mini Games/MagicFingers';
-import { fetchStudentProgress, fetchCurriculum } from './utils/api';
+import { fetchStudentProgress, fetchCurriculum, flushOfflineScoreQueue } from './utils/api';
 import { stopAllActiveCameraStreams } from './utils/cameraManager';
 import type { Section } from './data/curriculum';
 import { CURRICULUM } from './data/curriculum';
@@ -83,6 +83,18 @@ function App() {
   useEffect(() => {
     refreshProgress();
   }, [currentView]);
+
+  // Automatically flush any queued offline scores and refresh student progress on reconnect/sync
+  useEffect(() => {
+    const handleScoresSynced = () => {
+      refreshProgress();
+    };
+    window.addEventListener('elocia-scores-synced', handleScoresSynced);
+    flushOfflineScoreQueue();
+    return () => {
+      window.removeEventListener('elocia-scores-synced', handleScoresSynced);
+    };
+  }, []);
 
   // Camera Safety Watchdog: Ensure camera is completely killed when entering any non-camera view
   useEffect(() => {
@@ -215,13 +227,19 @@ function App() {
               }
             }
 
-            // Persist completed stage locally for instantaneous unlock in Review Past Stages
+            // Persist completed stage locally and optimistically unlock the next stage when offline
             try {
               const currentCompleted: number[] = JSON.parse(localStorage.getItem('elocia_completed_stages') || '[]');
               if (!currentCompleted.includes(completedStageId)) {
                 currentCompleted.push(completedStageId);
                 localStorage.setItem('elocia_completed_stages', JSON.stringify(currentCompleted));
               }
+              const nextStageId = completedStageId + 1;
+              setUnlockedStages((prev: number[]) => {
+                const merged = Array.from(new Set([...prev, completedStageId, nextStageId]));
+                localStorage.setItem('elocia_unlocked_stages', JSON.stringify(merged));
+                return merged;
+              });
             } catch (e) {
               console.warn('Failed to update local completed stages:', e);
             }

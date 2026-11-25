@@ -30,6 +30,7 @@ export function setApiBase(url: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ api_url: clean }),
     }).catch(() => {});
+    window.dispatchEvent(new Event('elocia-api-url-ready'));
   }
 }
 
@@ -253,25 +254,15 @@ export async function fetchMiniGameActivities(gameType: string): Promise<MiniGam
   }
 }
 
-export async function saveMiniGameScore(payload: {
+export interface MiniGameScorePayload {
   student_id: string;
   game_type: string;
   score: number;
   streak: number;
   rounds_completed: number;
-}) {
-  try {
-    await fetch(`${API_BASE}/minigames/scores`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    console.warn('Mini-game score save failed (offline?):', err);
-  }
 }
 
-export async function saveScore(payload: {
+export interface LessonScorePayload {
   student_id: string;
   activity_type: string;
   stage_id: number;
@@ -286,28 +277,269 @@ export async function saveScore(payload: {
   passed: boolean;
   streak?: number;
   xp_earned?: number;
-}) {
+}
+
+export type OfflineQueueItemType =
+  | 'lesson_score'
+  | 'minigame_score'
+  | 'focus_drill_remove'
+  | 'focus_drill_complete';
+
+export interface OfflineQueueItem {
+  id: string;
+  type: OfflineQueueItemType;
+  payload: any;
+  createdAt: string;
+  retryCount: number;
+}
+
+const OFFLINE_SCORE_QUEUE_KEY = 'elocia_offline_score_queue';
+const REQUEST_TIMEOUT_MS = 10000;
+const RETRY_INTERVAL_MS = 15000;
+
+let isFlushingOfflineQueue = false;
+
+export function getOfflineScoreQueue(): OfflineQueueItem[] {
+  if (typeof window === 'undefined') return [];
   try {
-    const params = new URLSearchParams({
-      student_id: payload.student_id,
-      activity_type: payload.activity_type,
-      stage_id: String(payload.stage_id),
-      sign_id: String(payload.sign_id),
-      attempt_number: String(payload.attempt_number),
-      tier_level: String(payload.tier_level),
-      score_handshape: String(payload.score_handshape),
-      score_palm_orientation: String(payload.score_palm_orientation),
-      score_location: String(payload.score_location),
-      score_movement: String(payload.score_movement),
-      score_overall: String(payload.score_overall),
-      passed: String(payload.passed),
-      streak: String(payload.streak ?? 0),
-      xp_earned: String(payload.xp_earned ?? 0),
-    });
-    await fetch(`${API_BASE}/scores/save?${params}`, { method: 'POST' });
+    const raw = localStorage.getItem(OFFLINE_SCORE_QUEUE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
   } catch (err) {
-    console.warn('Score save failed (offline?):', err);
+    console.warn('[OfflineSync] Failed reading offline score queue:', err);
+    return [];
   }
+}
+
+function saveOfflineScoreQueue(queue: OfflineQueueItem[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(OFFLINE_SCORE_QUEUE_KEY, JSON.stringify(queue));
+    window.dispatchEvent(
+      new CustomEvent('elocia-offline-queue-updated', {
+        detail: { pendingCount: queue.length },
+      })
+    );
+  } catch (err) {
+    console.warn('[OfflineSync] Failed persisting offline score queue:', err);
+  }
+}
+
+export function getPendingOfflineScoreCount(): number {
+  return getOfflineScoreQueue().length;
+}
+
+function enqueueOfflinePayload(type: OfflineQueueItemType, payload: any): OfflineQueueItem {
+  const item: OfflineQueueItem = {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+    type,
+    payload,
+    createdAt: new Date().toISOString(),
+    retryCount: 0,
+  };
+  const queue = getOfflineScoreQueue();
+  queue.push(item);
+  saveOfflineScoreQueue(queue);
+  console.info(`[OfflineSync] Queued unsynchronized '${type}' payload locally (${queue.length} pending).`);
+  return item;
+}
+
+function removeOfflineQueueItemById(id: string): void {
+  const queue = getOfflineScoreQueue().filter((item) => item.id !== id);
+  saveOfflineScoreQueue(queue);
+}
+
+function incrementOfflineQueueRetry(id: string): void {
+  const queue = getOfflineScoreQueue().map((item) =>
+    item.id === id ? { ...item, retryCount: (item.retryCount || 0) + 1 } : item
+  );
+  saveOfflineScoreQueue(queue);
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function transmitPayloadDirect(
+  type: OfflineQueueItemType,
+  payload: any
+): Promise<'delivered' | 'transient_failure' | 'permanent_failure'> {
+  try {
+    let res: Response;
+
+    if (type === 'lesson_score') {
+      const p = payload as LessonScorePayload;
+      if (!p || !p.student_id) return 'permanent_failure';
+      const params = new URLSearchParams({
+        student_id: p.student_id,
+        activity_type: p.activity_type,
+        stage_id: String(p.stage_id),
+        sign_id: String(p.sign_id),
+        attempt_number: String(p.attempt_number),
+        tier_level: String(p.tier_level),
+        score_handshape: String(p.score_handshape),
+        score_palm_orientation: String(p.score_palm_orientation),
+        score_location: String(p.score_location),
+        score_movement: String(p.score_movement),
+        score_overall: String(p.score_overall),
+        passed: String(p.passed),
+        streak: String(p.streak ?? 0),
+        xp_earned: String(p.xp_earned ?? 0),
+      });
+      res = await fetchWithTimeout(`${API_BASE}/scores/save?${params}`, { method: 'POST' });
+    } else if (type === 'minigame_score') {
+      const p = payload as MiniGameScorePayload;
+      if (!p || !p.student_id) return 'permanent_failure';
+      res = await fetchWithTimeout(`${API_BASE}/minigames/scores`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(p),
+      });
+    } else if (type === 'focus_drill_remove') {
+      if (!payload?.studentId || !payload?.sign) return 'permanent_failure';
+      res = await fetchWithTimeout(`${API_BASE}/analytics/drills/student/${payload.studentId}/remove-sign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sign: payload.sign, stage_id: payload.stageId }),
+      });
+    } else if (type === 'focus_drill_complete') {
+      if (!payload?.studentId) return 'permanent_failure';
+      res = await fetchWithTimeout(`${API_BASE}/analytics/drills/student/${payload.studentId}/complete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stage_id: payload.stageId, signs: payload.signs || [] }),
+      });
+    } else {
+      return 'permanent_failure';
+    }
+
+    if (res.ok) {
+      return 'delivered';
+    }
+
+    // 4xx client errors (except 408 Request Timeout and 429 Too Many Requests) are unrecoverable
+    if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+      console.warn(`[OfflineSync] Dropping non-retryable '${type}' payload (HTTP ${res.status}).`);
+      return 'permanent_failure';
+    }
+
+    return 'transient_failure';
+  } catch {
+    return 'transient_failure';
+  }
+}
+
+/**
+ * Retransmits all locally queued score and drill payloads in strict FIFO order
+ * once network/backend connectivity is restored.
+ */
+export async function flushOfflineScoreQueue(): Promise<number> {
+  if (typeof window === 'undefined' || isFlushingOfflineQueue) return 0;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 0;
+
+  const initialQueue = getOfflineScoreQueue();
+  if (initialQueue.length === 0) return 0;
+
+  isFlushingOfflineQueue = true;
+  let syncedCount = 0;
+
+  try {
+    while (true) {
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) break;
+
+      const currentQueue = getOfflineScoreQueue();
+      if (currentQueue.length === 0) break;
+
+      const head = currentQueue[0];
+      const outcome = await transmitPayloadDirect(head.type, head.payload);
+
+      if (outcome === 'delivered') {
+        removeOfflineQueueItemById(head.id);
+        syncedCount += 1;
+        console.info(`[OfflineSync] Retransmitted queued '${head.type}' payload (${head.id}).`);
+      } else if (outcome === 'permanent_failure') {
+        removeOfflineQueueItemById(head.id);
+      } else {
+        // Transient network/server failure: keep item at head of FIFO queue for next retry cycle
+        incrementOfflineQueueRetry(head.id);
+        break;
+      }
+    }
+  } finally {
+    isFlushingOfflineQueue = false;
+  }
+
+  if (syncedCount > 0 && typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('elocia-scores-synced', {
+        detail: {
+          syncedCount,
+          remainingCount: getPendingOfflineScoreCount(),
+        },
+      })
+    );
+  }
+
+  return syncedCount;
+}
+
+async function submitOrQueuePayload(type: OfflineQueueItemType, payload: any): Promise<void> {
+  const isOffline = typeof navigator !== 'undefined' && navigator.onLine === false;
+  const hasPendingItems = getPendingOfflineScoreCount() > 0;
+
+  // Preserve strict FIFO ordering if earlier scores are already waiting in the queue
+  if (isOffline || hasPendingItems) {
+    enqueueOfflinePayload(type, payload);
+    if (!isOffline) {
+      await flushOfflineScoreQueue();
+    }
+    return;
+  }
+
+  const outcome = await transmitPayloadDirect(type, payload);
+  if (outcome === 'transient_failure') {
+    enqueueOfflinePayload(type, payload);
+  }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', () => {
+    console.info('[OfflineSync] Connectivity restored — flushing queued score payloads...');
+    flushOfflineScoreQueue();
+  });
+
+  window.addEventListener('elocia-api-url-ready', () => {
+    flushOfflineScoreQueue();
+  });
+
+  setInterval(() => {
+    if (getPendingOfflineScoreCount() > 0) {
+      flushOfflineScoreQueue();
+    }
+  }, RETRY_INTERVAL_MS);
+
+  setTimeout(() => {
+    if (getPendingOfflineScoreCount() > 0) {
+      flushOfflineScoreQueue();
+    }
+  }, 1500);
+}
+
+export async function saveMiniGameScore(payload: MiniGameScorePayload) {
+  if (!payload?.student_id) return;
+  await submitOrQueuePayload('minigame_score', payload);
+}
+
+export async function saveScore(payload: LessonScorePayload) {
+  if (!payload?.student_id) return;
+  await submitOrQueuePayload('lesson_score', payload);
 }
 
 export interface StudentProgress {
@@ -344,6 +576,9 @@ export async function fetchCurriculum(gradeLevel?: number): Promise<Section[] | 
 
 export async function fetchStudentProgress(studentId: string): Promise<StudentProgress | null> {
   try {
+    if (getPendingOfflineScoreCount() > 0) {
+      await flushOfflineScoreQueue();
+    }
     const res = await fetch(`${API_BASE}/users/${studentId}/progress`);
     if (!res.ok) return null;
     return await res.json();
@@ -506,29 +741,41 @@ export async function fetchActiveFocusDrill(studentId: string): Promise<FocusDri
 }
 
 export async function completeFocusDrill(studentId: string, stageId?: number, signs?: string[]): Promise<void> {
+  if (!studentId) return;
   const bases = [String(API_BASE), 'http://localhost:8000', 'http://127.0.0.1:8000', 'https://elocia.onrender.com'];
   const payload = JSON.stringify({ stage_id: stageId, signs: signs || [] });
+  let anyDelivered = false;
   for (const base of bases) {
     try {
-      await fetch(`${base}/analytics/drills/student/${studentId}/complete`, {
+      const res = await fetch(`${base}/analytics/drills/student/${studentId}/complete`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
       });
+      if (res.ok) anyDelivered = true;
     } catch {}
+  }
+  if (!anyDelivered) {
+    enqueueOfflinePayload('focus_drill_complete', { studentId, stageId, signs: signs || [] });
   }
 }
 
 export async function removeFocusDrillSign(studentId: string, sign: string, stageId?: number): Promise<void> {
+  if (!studentId || !sign) return;
   const bases = [String(API_BASE), 'http://localhost:8000', 'http://127.0.0.1:8000', 'https://elocia.onrender.com'];
   const payload = JSON.stringify({ sign, stage_id: stageId });
+  let anyDelivered = false;
   for (const base of bases) {
     try {
-      await fetch(`${base}/analytics/drills/student/${studentId}/remove-sign`, {
+      const res = await fetch(`${base}/analytics/drills/student/${studentId}/remove-sign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
       });
+      if (res.ok) anyDelivered = true;
     } catch {}
+  }
+  if (!anyDelivered) {
+    enqueueOfflinePayload('focus_drill_remove', { studentId, sign, stageId });
   }
 }
